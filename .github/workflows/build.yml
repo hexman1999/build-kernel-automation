@@ -642,9 +642,11 @@ jobs:
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ZIP_NAME }}
-          path: ${{ env.ZIP_NAME }}.zip
-          retention-days: 30
+         name: ${{ env.ZIP_NAME }}
+         # Provide the path to the zip, but ensure the 'name' is what you want the 
+         # downloaded folder to be called.
+         path: ${{ env.ZIP_NAME }}.zip
+
 
       - name: Create GitHub Release
         if: ${{ github.event.inputs.release == 'true' }}
