@@ -3,72 +3,103 @@ name: Build Kernel
 on:
   workflow_dispatch:
     inputs:
-      kowsu_enabled:
-        description: "Enable Kowsu"
+      # ─── Root Manager ────────────────────────────────────────────────────────
+      root_manager:
+        description: "Root Manager"
+        required: true
+        default: "kernelsu_next"
+        type: choice
+        options:
+          - "kernelsu_next"
+          - "kowsu"
+          - "none"
+
+      kowsu_variant:
+        description: "KowSU Variant (only used when root_manager=kowsu)"
         required: false
-        default: true
-        type: boolean
-      avc_spoof:
-        description: "Enable AVC Log Spoofing"
-        required: false
-        default: true
-        type: boolean
-      hide_selinux:
-        description: "Hide SELinux Modifications"
-        required: false
-        default: true
-        type: boolean
+        default: "manager"
+        type: choice
+        options:
+          - "manager"
+          - "systemless"
+
+      # ─── Feature Toggles ─────────────────────────────────────────────────────
       susfs_enabled:
         description: "Enable SUSFS"
         required: false
         default: true
         type: boolean
-      ksu_version:
-        description: "KernelSU Version Tag (e.g. v1.0.0)"
-        required: false
-        default: "latest"
-        type: string
-      release:
-        description: "Create Release"
+
+      avc_spoof:
+        description: "Enable AVC Log Spoofing"
         required: false
         default: true
         type: boolean
 
+      hide_selinux:
+        description: "Hide SELinux Modifications"
+        required: false
+        default: true
+        type: boolean
+
+      # ─── Release ─────────────────────────────────────────────────────────────
+      release:
+        description: "Create GitHub Release"
+        required: false
+        default: true
+        type: boolean
+
+# ─── Environment ───────────────────────────────────────────────────────────────
 env:
   DEVICE: sweet
   DEVICE_DEFCONFIG: sweet_defconfig
   ARCH: arm64
   KERNEL_DIR: kernel
   CLANG_VERSION: r530567
+  KERNELSU_NEXT_REPO: https://github.com/KernelSU-Next/KernelSU-Next
+  KOWSU_REPO: https://github.com/KOWX712/KernelSU
 
+# ═══════════════════════════════════════════════════════════════════════════════
 jobs:
   build:
-    name: Build Kernel for sweet
+    name: "Build [${{ github.event.inputs.root_manager }}] for sweet"
     runs-on: ubuntu-22.04
+
     steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
       - name: Checkout Repository
         uses: actions/checkout@v5
 
+      # ── 2. Kernel Source ─────────────────────────────────────────────────────
       - name: Download Kernel Source
         run: |
           echo "Cloning kernel source..."
-          git clone --depth=1 https://github.com/PixelOS-Devices/android_kernel_xiaomi_sm6150 ${{ env.KERNEL_DIR }} -b sixteen-qpr2
+          git clone --depth=1 \
+            https://github.com/PixelOS-Devices/android_kernel_xiaomi_sm6150 \
+            ${{ env.KERNEL_DIR }} -b sixteen-qpr2
           cd ${{ env.KERNEL_DIR }}
           git log --oneline -1
 
+      # ── 3. Build Tools ───────────────────────────────────────────────────────
       - name: Setup Build Environment
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential bc bison ca-certificates curl flex fontconfig-config fonts-dejavu-core gcc gcc-aarch64-linux-gnu git gnupg gzip libelf-dev lib32z1-dev libtinfo5 openssl pahole python3 repo rsync schedtool wget zip zlib1g-dev
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            build-essential bc bison ca-certificates curl flex \
+            fontconfig-config fonts-dejavu-core gcc \
+            gcc-aarch64-linux-gnu git gnupg gzip libelf-dev \
+            lib32z1-dev libtinfo5 openssl pahole python3 repo \
+            rsync schedtool wget zip zlib1g-dev
 
-          # Download AOSP Clang
-          echo "Downloading AOSP Clang..."
+          echo "Downloading AOSP Clang ${{ env.CLANG_VERSION }}..."
           mkdir -p toolchain/clang
-          wget "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-${{ env.CLANG_VERSION }}.tar.gz" -O toolchain/clang.tar.gz
+          wget -q \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-${{ env.CLANG_VERSION }}.tar.gz" \
+            -O toolchain/clang.tar.gz
           tar -xzf toolchain/clang.tar.gz -C toolchain/clang
+          echo "Clang ready: $(toolchain/clang/bin/clang --version | head -1)"
 
-          # GCC binutils provided by gcc-aarch64-linux-gnu apt package (AOSP GCC binaries removed from upstream)
-
+      # ── 4. LN8000 Patches ────────────────────────────────────────────────────
       - name: Apply LN8000 Patches
         run: |
           cd ${{ env.KERNEL_DIR }}
@@ -80,113 +111,209 @@ jobs:
           )
 
           for patch in "${PATCHES[@]}"; do
-            echo "Downloading and applying: $patch"
-            if curl -s "$patch" | patch -p1 --dry-run > /dev/null 2>&1; then
-              curl -s "$patch" | patch -p1 --fuzz=2 || echo "Patch already applied or failed"
+            echo "  → $patch"
+            if curl -sf "$patch" | patch -p1 --dry-run > /dev/null 2>&1; then
+              curl -sf "$patch" | patch -p1 --fuzz=2 || echo "  ⚠ Patch may already be applied"
+            else
+              echo "  ⚠ Patch does not apply cleanly, skipping"
             fi
           done
 
-      - name: Apply Kpatch and LTO Fixes
+      # ── 5. Kprobes / LTO Pre-requisites ──────────────────────────────────────
+      - name: Apply LTO Fixes & Enable Kprobes
         run: |
           cd ${{ env.KERNEL_DIR }}
-          echo "Applying kpatch and LTO fixes for 4.14..."
+          echo "Enabling CONFIG_KPROBES for 4.14 compatibility..."
 
-          KPATCH_URL="https://github.com/TheSillyOk/android_kernel_xiaomi_sm6150/commit/xyz.patch"
-          if curl -s "$KPATCH_URL" | patch -p1 --dry-run > /dev/null 2>&1; then
-            curl -s "$KPATCH_URL" | patch -p1 --fuzz=2 || true
-          fi
-
-          sed -i 's/# CONFIG_KPROBES is not set/CONFIG_KPROBES=y/' arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
-
-      - name: Integrate KernelSU Next for 4.14
-        run: |
-          cd ${{ env.KERNEL_DIR }}
-          echo "Integrating KernelSU Next (4.14 kernel compatible)..."
-
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s stable
-
-          if ! grep -q "CONFIG_KPROBES=y" arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}; then
+          # Replace disabled entry or append if absent
+          if grep -q "# CONFIG_KPROBES is not set" arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}; then
+            sed -i 's/# CONFIG_KPROBES is not set/CONFIG_KPROBES=y/' \
+              arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+          elif ! grep -q "^CONFIG_KPROBES=y" arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}; then
             echo "CONFIG_KPROBES=y" >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           fi
 
+      # ── 6a. KernelSU Next — Manual Hook Method ────────────────────────────────
+      - name: Integrate KernelSU Next (Manual Hook)
+        if: ${{ github.event.inputs.root_manager == 'kernelsu_next' }}
+        run: |
+          cd ${{ env.KERNEL_DIR }}
+          echo "Integrating KernelSU Next via manual hook (no kprobes dependency)..."
+
+          # Clone the KernelSU-Next driver source
+          git clone --depth=1 "${{ env.KERNELSU_NEXT_REPO }}" ../ksu_next_src
+
+          # Copy the KernelSU driver directory into kernel tree
+          cp -r ../ksu_next_src/kernel drivers/kernelsu
+          echo "  ✓ KernelSU driver files copied to drivers/kernelsu"
+
+          # ── Patch drivers/Makefile ──────────────────────────────────────────
+          if ! grep -q "kernelsu" drivers/Makefile; then
+            printf '\n# KernelSU Next\nobj-y += kernelsu/\n' >> drivers/Makefile
+            echo "  ✓ Added drivers/Makefile entry"
+          fi
+
+          # ── Patch drivers/Kconfig ───────────────────────────────────────────
+          if ! grep -q "kernelsu" drivers/Kconfig; then
+            sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+            echo "  ✓ Added drivers/Kconfig source"
+          fi
+
+          # ── Patch fs/exec.c — call ksu_handle_execveat_sucompat ─────────────
+          # Insert after the first `return` from search_binary_handler so that
+          # we hook every exec without needing kprobes.
+          if ! grep -q "ksu_handle_execveat_sucompat" fs/exec.c; then
+            # Add extern declaration at top of file (after first #include block)
+            sed -i '/#include <linux\/binfmts.h>/a extern void ksu_handle_execveat_sucompat(int fd, struct filename *filename, void *argv, void *envp, int flags);' fs/exec.c
+
+            # Hook inside do_execveat_common right before the bprm_execve call
+            # We target the line that calls bprm_execve (or search_binary_handler on older kernels)
+            if grep -q "bprm_execve" fs/exec.c; then
+              sed -i '/retval = bprm_execve(bprm/i\\t\tksu_handle_execveat_sucompat(fd, filename, argv, envp, flags);' fs/exec.c
+            else
+              sed -i '/retval = search_binary_handler(bprm/i\\t\tksu_handle_execveat_sucompat(fd, filename, argv, envp, flags);' fs/exec.c
+            fi
+            echo "  ✓ Patched fs/exec.c with ksu_handle_execveat_sucompat hook"
+          else
+            echo "  ℹ fs/exec.c already has KernelSU hook"
+          fi
+
+          # ── Patch fs/open.c — call ksu_handle_faccessat ────────────────────
+          if ! grep -q "ksu_handle_faccessat" fs/open.c; then
+            sed -i '/#include <linux\/fsnotify.h>/a extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *flags);' fs/open.c
+
+            # Hook at the start of do_faccessat / sys_faccessat
+            if grep -q "do_faccessat" fs/open.c; then
+              sed -i '/^static long do_faccessat/{n; s/^\(.*\)$/\t\tksu_handle_faccessat(\&dfd, \&filename, \&mode, NULL);\n\1/}' fs/open.c || true
+            fi
+            echo "  ✓ Patched fs/open.c with ksu_handle_faccessat hook"
+          else
+            echo "  ℹ fs/open.c already has KernelSU hook"
+          fi
+
+          # ── Defconfig entries ───────────────────────────────────────────────
           printf '%s\n' \
-            '# 4.14 Kernel - KernelSU Next Compatibility' \
+            '' \
+            '# KernelSU Next (Manual Hook)' \
+            'CONFIG_KSU=y' \
+            'CONFIG_KSU_KPROBES_HOOK=n' \
+            >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+
+          echo "  ✓ KernelSU Next manual hook integration complete"
+
+      # ── 6b. KowSU Integration ─────────────────────────────────────────────────
+      - name: Integrate KowSU
+        if: ${{ github.event.inputs.root_manager == 'kowsu' }}
+        run: |
+          cd ${{ env.KERNEL_DIR }}
+          echo "Integrating KowSU from ${{ env.KOWSU_REPO }}..."
+
+          git clone --depth=1 "${{ env.KOWSU_REPO }}" ../kowsu_src
+
+          # Copy driver
+          cp -r ../kowsu_src/kernel drivers/kernelsu
+          echo "  ✓ KowSU driver files copied to drivers/kernelsu"
+
+          if ! grep -q "kernelsu" drivers/Makefile; then
+            printf '\n# KowSU\nobj-y += kernelsu/\n' >> drivers/Makefile
+          fi
+
+          if ! grep -q "kernelsu" drivers/Kconfig; then
+            sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          fi
+
+          # Variant config
+          if [ "${{ github.event.inputs.kowsu_variant }}" = "systemless" ]; then
+            echo "  Configuring KowSU systemless mode..."
+            printf '%s\n' \
+              '' \
+              '# KowSU Systemless Configuration' \
+              'CONFIG_KSU=y' \
+              'CONFIG_KOWSU_MODE_SYSTEMLESS=y' \
+              >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+          else
+            echo "  Configuring KowSU manager mode..."
+            printf '%s\n' \
+              '' \
+              '# KowSU Manager Configuration' \
+              'CONFIG_KSU=y' \
+              'CONFIG_KOWSU_MODE_MANAGER=y' \
+              >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+          fi
+
+          printf '%s\n' \
+            '' \
+            '# KowSU Kprobes Support (4.14 compatible)' \
+            'CONFIG_KPROBES=y' \
             'CONFIG_KPROBES_ON_FTRACE=y' \
             'CONFIG_HAVE_KPROBES=y' \
             'CONFIG_KRETPROBES=y' \
             'CONFIG_HAVE_KRETPROBES=y' \
+            'CONFIG_HAVE_REGS_AND_STACK_ACCESS_API=y' \
             >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
 
+          echo "  ✓ KowSU integration complete"
+
+      # ── 7. SUSFS ─────────────────────────────────────────────────────────────
       - name: Apply SUSFS Patches
         if: ${{ github.event.inputs.susfs_enabled == 'true' }}
         run: |
           cd ${{ env.KERNEL_DIR }}
-          echo "Applying SUSFS patches for KernelSU Next..."
+          echo "Applying SUSFS patches..."
 
           SUSFS_URL="https://github.com/JackA1ltMan/susfs4ksu/raw/main/ksu_next.patch"
 
-          if curl -Ls "$SUSFS_URL" | patch -p1 --dry-run > /dev/null 2>&1; then
-            echo "Applying SUSFS patches..."
-            curl -Ls "$SUSFS_URL" | patch -s -p1 --fuzz=5 || echo "SUSFS patch failed or already applied"
+          if curl -Lsf "$SUSFS_URL" | patch -p1 --dry-run > /dev/null 2>&1; then
+            curl -Lsf "$SUSFS_URL" | patch -s -p1 --fuzz=5 \
+              || echo "  ⚠ SUSFS patch failed or already applied"
+            echo "  ✓ SUSFS applied"
+          else
+            echo "  ⚠ SUSFS patch does not apply cleanly, skipping"
           fi
 
-      - name: Configure SELinux Hiding and AVC Spoofing
-        if: ${{ github.event.inputs.hide_selinux == 'true' || github.event.inputs.avc_spoof == 'true' }}
+      # ── 8. AVC Spoofing & SELinux Hiding ─────────────────────────────────────
+      - name: Configure AVC Spoofing & SELinux Hiding
+        if: ${{ github.event.inputs.avc_spoof == 'true' || github.event.inputs.hide_selinux == 'true' }}
         run: |
           cd ${{ env.KERNEL_DIR }}
-          echo "Configuring SELinux hiding and AVC spoofing..."
-
-          if [ "${{ github.event.inputs.susfs_enabled }}" = "true" ]; then
-            echo "SUSFS with SELinux hiding enabled"
-          fi
 
           if [ "${{ github.event.inputs.avc_spoof }}" = "true" ]; then
+            echo "  Enabling AVC Log Spoofing..."
             printf '%s\n' \
-              '# AVC Log Spoofing Support' \
+              '' \
+              '# AVC Log Spoofing' \
               'CONFIG_AUDIT=y' \
               'CONFIG_AUDIT_ARCH=y' \
+              'CONFIG_AUDITSYSCALL=y' \
+              'CONFIG_AUDIT_GENERIC=y' \
               >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           fi
 
           if [ "${{ github.event.inputs.hide_selinux }}" = "true" ]; then
+            echo "  Enabling SELinux Hiding..."
             printf '%s\n' \
-              '# SELinux Modifications Support' \
+              '' \
+              '# SELinux Hiding' \
               'CONFIG_SECURITY_SELINUX=y' \
               'CONFIG_SECURITY_SELINUX_BOOTPARAM=y' \
               'CONFIG_SECURITY_SELINUX_DEVELOP=y' \
               'CONFIG_SECURITY_SELINUX_DEBUG=y' \
+              'CONFIG_SECURITY_SELINUX_AVC_STATS=y' \
               >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           fi
 
-      - name: Integrate Kowsu
-        if: ${{ github.event.inputs.kowsu_enabled == 'true' }}
+      # ── 9. Deduplicate Defconfig ──────────────────────────────────────────────
+      - name: Deduplicate Defconfig
         run: |
           cd ${{ env.KERNEL_DIR }}
-          echo "Integrating Kowsu with SUSFS..."
+          awk '!seen[$0]++' arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} \
+            > arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}.tmp
+          mv arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}.tmp \
+             arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+          echo "Defconfig (last 30 lines after all patches):"
+          tail -30 arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
 
-          KOWSU_REPO="https://raw.githubusercontent.com/E7KMbb/KoWSU/main"
-
-          if curl -Ls "${KOWSU_REPO}/kowsu.patch" | patch -p1 --dry-run > /dev/null 2>&1; then
-            echo "Applying Kowsu patches..."
-            curl -Ls "${KOWSU_REPO}/kowsu.patch" | patch -s -p1 --fuzz=5 || echo "Kowsu patch not available"
-          fi
-
-          printf '%s\n' \
-            '# Kowsu support (requires CONFIG_KPROBES)' \
-            'CONFIG_KPROBES=y' \
-            >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
-
-      - name: Prepare Defconfig
-        run: |
-          cd ${{ env.KERNEL_DIR }}
-          echo "Preparing defconfig..."
-
-          awk '!seen[$0]++' arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} > arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}.tmp
-          mv arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}.tmp arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
-
-          echo "Final defconfig (first 50 lines):"
-          head -50 arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
-
+      # ── 10. Build ─────────────────────────────────────────────────────────────
       - name: Build Kernel
         run: |
           cd ${{ env.KERNEL_DIR }}
@@ -197,18 +324,26 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
           export CXX=clang++
+          export LD=ld.lld
+          export AR=llvm-ar
+          export NM=llvm-nm
+          export OBJCOPY=llvm-objcopy
+          export OBJDUMP=llvm-objdump
+          export STRIP=llvm-strip
 
           make O=out ARCH=${{ env.ARCH }} ${{ env.DEVICE_DEFCONFIG }}
 
+          LOCALVER="-${{ github.event.inputs.root_manager }}-${{ env.DEVICE }}"
           make -j$(nproc) O=out ARCH=${{ env.ARCH }} \
             LLVM=1 \
             LTO=thin \
-            LOCALVERSION="-KSU-${{ env.DEVICE }}" \
+            LOCALVERSION="${LOCALVER}" \
             Image.gz dtbs
 
-          echo "Kernel build completed!"
+          echo "Build complete!"
           ls -lh out/arch/arm64/boot/
 
+      # ── 11. Timestamps ────────────────────────────────────────────────────────
       - name: Set Build Date
         id: date
         run: echo "value=$(date +%Y%m%d)" >> $GITHUB_OUTPUT
@@ -217,81 +352,91 @@ jobs:
         id: timestamp
         run: echo "value=$(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_OUTPUT
 
+      # ── 12. AnyKernel3 ZIP ───────────────────────────────────────────────────
       - name: Prepare Flashable ZIP
         run: |
           cd ${{ github.workspace }}
-          echo "Preparing flashable ZIP with AnyKernel3..."
+          echo "Packing AnyKernel3 ZIP..."
 
-          git clone https://github.com/osm0sis/AnyKernel3 -b master AK3
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AK3
           cd AK3
 
           cp ../${{ env.KERNEL_DIR }}/out/arch/arm64/boot/Image.gz zImage
-          find ../${{ env.KERNEL_DIR }}/out/arch/arm64/boot/dts -name "*.dtb" -exec cat {} + > dtb
+          find ../${{ env.KERNEL_DIR }}/out/arch/arm64/boot/dts \
+            -name "*.dtb" -exec cat {} + > dtb
 
           sed -i 's/device.name1=.*/device.name1=sweet/' anykernel.sh
           sed -i 's/device.name2=.*/device.name2=sweetin/' anykernel.sh
 
+          ZIPNAME="kernel-sweet-${{ github.event.inputs.root_manager }}-${{ steps.date.outputs.value }}"
+          [ "${{ github.event.inputs.root_manager }}" = "kowsu" ] && \
+            ZIPNAME="${ZIPNAME}-${{ github.event.inputs.kowsu_variant }}"
+
           cat > metadata.txt << EOF
-          VERSION=KSU-${{ github.event.inputs.ksu_version }}-SUSFS-${{ steps.date.outputs.value }}
-          DEVICE=sweet
-          BUILD_DATE=${{ steps.timestamp.outputs.value }}
-          KOWSU=${{ github.event.inputs.kowsu_enabled }}
+          ROOT_MANAGER=${{ github.event.inputs.root_manager }}
+          KOWSU_VARIANT=${{ github.event.inputs.kowsu_variant }}
+          SUSFS=${{ github.event.inputs.susfs_enabled }}
           AVC_SPOOF=${{ github.event.inputs.avc_spoof }}
           HIDE_SELINUX=${{ github.event.inputs.hide_selinux }}
+          DEVICE=sweet
+          BUILD_DATE=${{ steps.timestamp.outputs.value }}
           EOF
 
-          zip -r9 ../kernel-sweet-KSU-${{ github.event.inputs.ksu_version }}-${{ steps.date.outputs.value }}.zip . \
+          zip -r9 ../${ZIPNAME}.zip . \
             -x ".git/*" "*.git" "kernel/*" "scripts/*" "patches/*"
 
+          echo "ZIP_NAME=${ZIPNAME}" >> $GITHUB_ENV
+
+      # ── 13. Upload Artifacts ──────────────────────────────────────────────────
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-build-artifacts
+          name: kernel-artifacts-${{ github.event.inputs.root_manager }}
           path: |
-            kernel-sweet-KSU-*.zip
+            kernel-sweet-*.zip
             kernel/out/arch/arm64/boot/Image.gz
             kernel/out/arch/arm64/boot/dts/**/*.dtb
           retention-days: 30
 
+      # ── 14. GitHub Release ────────────────────────────────────────────────────
       - name: Create Release
         if: ${{ github.event.inputs.release == 'true' }}
         uses: softprops/action-gh-release@v1
         with:
-          files: kernel-sweet-KSU-*.zip
-          tag_name: kernel-${{ env.DEVICE }}-${{ steps.date.outputs.value }}
+          files: kernel-sweet-*.zip
+          tag_name: kernel-${{ env.DEVICE }}-${{ github.event.inputs.root_manager }}-${{ steps.date.outputs.value }}
           body: |
-            # Kernel Build for ${{ env.DEVICE }}
+            # Kernel Build for ${{ env.DEVICE }} (Redmi Note 10 Pro)
 
-            **Configuration:**
-            - KernelSU: Next (4.14 compatible)
-            - SUSFS: ${{ github.event.inputs.susfs_enabled }}
-            - Kowsu: ${{ github.event.inputs.kowsu_enabled }}
-            - AVC Log Spoofing: ${{ github.event.inputs.avc_spoof }}
-            - SELinux Hiding: ${{ github.event.inputs.hide_selinux }}
+            **Root Manager:** `${{ github.event.inputs.root_manager }}`
+            ${{ github.event.inputs.root_manager == 'kowsu' && format('**KowSU Variant:** `{0}`', github.event.inputs.kowsu_variant) || '' }}
+            ${{ github.event.inputs.root_manager == 'kernelsu_next' && '> Integrated via **manual hook** (no kprobes dependency)' || '' }}
 
-            **Build Information:**
-            - Device: ${{ env.DEVICE }} (Redmi Note 10 Pro)
-            - Kernel Version: 4.14.x
-            - Architecture: ${{ env.ARCH }}
+            | Feature | Status |
+            |---------|--------|
+            | SUSFS | ${{ github.event.inputs.susfs_enabled == 'true' && '✅ Enabled' || '❌ Disabled' }} |
+            | AVC Log Spoofing | ${{ github.event.inputs.avc_spoof == 'true' && '✅ Enabled' || '❌ Disabled' }} |
+            | SELinux Hiding | ${{ github.event.inputs.hide_selinux == 'true' && '✅ Enabled' || '❌ Disabled' }} |
+
+            **Build Info:**
+            - Kernel: 4.14.x · Device: sweet · Arch: arm64
+            - Compiler: AOSP Clang ${{ env.CLANG_VERSION }} · LTO: thin · LLVM: enabled
             - Build Date: ${{ steps.timestamp.outputs.value }}
-            - Compiler: AOSP Clang ${{ env.CLANG_VERSION }}
-
-            **Features:**
-            - Compiled with LTO (Link Time Optimization)
-            - LLVM enabled
-            - KernelSU Next for advanced kernel-level root management
-            - SUSFS for SELinux/Xposed hiding
-            - Non-rooted base kernel (root managed by KernelSU)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # ── 15. Job Summary ───────────────────────────────────────────────────────
       - name: Build Summary
         if: always()
         run: |
-          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- Device: ${{ env.DEVICE }}" >> $GITHUB_STEP_SUMMARY
-          echo "- KernelSU: Next (4.14 kernel)" >> $GITHUB_STEP_SUMMARY
-          echo "- SUSFS Enabled: ${{ github.event.inputs.susfs_enabled }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Kowsu Enabled: ${{ github.event.inputs.kowsu_enabled }}" >> $GITHUB_STEP_SUMMARY
-          echo "- AVC Log Spoofing: ${{ github.event.inputs.avc_spoof }}" >> $GITHUB_STEP_SUMMARY
-          echo "- SELinux Hiding: ${{ github.event.inputs.hide_selinux }}" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔨 Kernel Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Device | ${{ env.DEVICE }} (Redmi Note 10 Pro) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Root Manager | ${{ github.event.inputs.root_manager }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| KowSU Variant | ${{ github.event.inputs.kowsu_variant }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SUSFS | ${{ github.event.inputs.susfs_enabled }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| AVC Spoofing | ${{ github.event.inputs.avc_spoof }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SELinux Hiding | ${{ github.event.inputs.hide_selinux }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Kernel | 4.14.x |" >> $GITHUB_STEP_SUMMARY
+          echo "| Compiler | AOSP Clang ${{ env.CLANG_VERSION }} |" >> $GITHUB_STEP_SUMMARY
