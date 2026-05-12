@@ -42,7 +42,7 @@ env:
 
 jobs:
   build:
-    name: Build Kernel with Kowsu for ${{ env.DEVICE }}
+    name: Build Kernel with Kowsu for sweet
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout Repository
