@@ -277,7 +277,7 @@ jobs:
         if: matrix.variant == 'kernelsu_next'
         run: |
           cd ${{ env.KERNEL_DIR }}
-          echo "── KernelSU Next: manual hook ──"
+          echo "── KernelSU Next: integration ──"
 
           git clone --depth=1 "${{ env.KERNELSU_NEXT_REPO }}" ../ksu_src
           cp -r ../ksu_src/kernel drivers/kernelsu
@@ -288,52 +288,64 @@ jobs:
           grep -q "kernelsu" drivers/Kconfig || \
             sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-          python3 /tmp/inject_ksu_hooks.py
-
-          # Fix uapi header visibility and version warnings
-          echo "ccflags-y += -DKSU_GIT_VERSION=\"\\\"ac539bd\\\"\"" >> drivers/kernelsu/Kbuild
-          
-          # Ensure uapi directory structure for KernelSU-Next
-          # Copy uapi files from ksu_src if available, otherwise create symlink
+          # Fix uapi directory BEFORE attempting hook injection
+          echo "Setting up uapi headers..."
           if [ -d "../ksu_src/kernel/uapi" ]; then
             mkdir -p drivers/kernelsu/uapi
             cp -r ../ksu_src/kernel/uapi/* drivers/kernelsu/uapi/ 2>/dev/null || true
+            echo "  ✓ uapi copied from source"
           fi
           
-          # Handle app_profile.h specifically - look for it in various locations
+          # Handle app_profile.h specifically
           if [ ! -f "drivers/kernelsu/uapi/app_profile.h" ]; then
-            # Search for app_profile.h in cloned source
             if [ -f "../ksu_src/kernel/uapi/app_profile.h" ]; then
               cp ../ksu_src/kernel/uapi/app_profile.h drivers/kernelsu/uapi/
             elif find ../ksu_src -name "app_profile.h" 2>/dev/null | grep -q .; then
               cp $(find ../ksu_src -name "app_profile.h" 2>/dev/null | head -1) drivers/kernelsu/uapi/
             else
-              # Create minimal stub if file doesn't exist
               mkdir -p drivers/kernelsu/uapi
               touch drivers/kernelsu/uapi/app_profile.h
             fi
           fi
           
           # Create symlink for policy includes
-          rm -rf drivers/kernelsu/policy/uapi
-          if [ -d "drivers/kernelsu/uapi" ]; then
-            ln -sf ../uapi drivers/kernelsu/policy/uapi
+          rm -rf drivers/kernelsu/policy/uapi 2>/dev/null || true
+          mkdir -p drivers/kernelsu/uapi
+          ln -sf ../uapi drivers/kernelsu/policy/uapi
+          echo "  ✓ uapi symlink created"
+
+          # Try manual hook, fallback to inline if it fails
+          echo "ccflags-y += -DKSU_GIT_VERSION=\"\\\"ac539bd\\\"\"" >> drivers/kernelsu/Kbuild
+          
+          if python3 /tmp/inject_ksu_hooks.py 2>&1 | grep -q "target.*not found"; then
+            echo "  ⚠ Manual hook injection failed for 4.14 kernel, using inline hook instead"
+            USE_INLINE_HOOK=1
           else
-            mkdir -p drivers/kernelsu/uapi
-            ln -sf ../uapi drivers/kernelsu/policy/uapi
+            USE_INLINE_HOOK=0
           fi
 
-          printf '%s\n' \
-            '' \
-            '# KernelSU Next — manual hook' \
-            'CONFIG_KSU=y' \
-            'CONFIG_KSU_MANUAL_HOOK=y' \
-            >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+          if [ "$USE_INLINE_HOOK" -eq 1 ]; then
+            printf '%s\n' \
+              '' \
+              '# KernelSU Next — inline hook (fallback)' \
+              'CONFIG_KSU=y' \
+              'CONFIG_KSU_INLINE_HOOK=y' \
+              >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+            echo "  ✓ Using inline hook mode"
+          else
+            printf '%s\n' \
+              '' \
+              '# KernelSU Next — manual hook' \
+              'CONFIG_KSU=y' \
+              'CONFIG_KSU_MANUAL_HOOK=y' \
+              >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+            echo "  ✓ Using manual hook mode"
+          fi
 
           grep -q "CONFIG_KSU_KPROBES_HOOK" drivers/kernelsu/Kconfig 2>/dev/null && \
             echo 'CONFIG_KSU_KPROBES_HOOK=n' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} || true
 
-          echo "  ✓ KernelSU Next done"
+          echo "  ✓ KernelSU Next integration complete"
 
       - name: Verify KernelSU uAPI Integration
         if: matrix.variant == 'kernelsu_next'
@@ -373,7 +385,7 @@ jobs:
         if: matrix.variant == 'kowsu'
         run: |
           cd ${{ env.KERNEL_DIR }}
-          echo "── KowSU: manual hook ──"
+          echo "── KowSU: integration ──"
 
           git clone --depth=1 "${{ env.KOWSU_REPO }}" ../ksu_src
           cp -r ../ksu_src/kernel drivers/kernelsu
@@ -384,52 +396,64 @@ jobs:
           grep -q "kernelsu" drivers/Kconfig || \
             sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-          python3 /tmp/inject_ksu_hooks.py
-
-          # Fix uapi header visibility and version warnings
-          echo "ccflags-y += -DKSU_GIT_VERSION=\"\\\"ac539bd\\\"\"" >> drivers/kernelsu/Kbuild
-          
-          # Ensure uapi directory structure for KowSU
-          # Copy uapi files from ksu_src if available, otherwise create symlink
+          # Fix uapi directory BEFORE attempting hook injection
+          echo "Setting up uapi headers..."
           if [ -d "../ksu_src/kernel/uapi" ]; then
             mkdir -p drivers/kernelsu/uapi
             cp -r ../ksu_src/kernel/uapi/* drivers/kernelsu/uapi/ 2>/dev/null || true
+            echo "  ✓ uapi copied from source"
           fi
           
-          # Handle app_profile.h specifically - look for it in various locations
+          # Handle app_profile.h specifically
           if [ ! -f "drivers/kernelsu/uapi/app_profile.h" ]; then
-            # Search for app_profile.h in cloned source
             if [ -f "../ksu_src/kernel/uapi/app_profile.h" ]; then
               cp ../ksu_src/kernel/uapi/app_profile.h drivers/kernelsu/uapi/
             elif find ../ksu_src -name "app_profile.h" 2>/dev/null | grep -q .; then
               cp $(find ../ksu_src -name "app_profile.h" 2>/dev/null | head -1) drivers/kernelsu/uapi/
             else
-              # Create minimal stub if file doesn't exist
               mkdir -p drivers/kernelsu/uapi
               touch drivers/kernelsu/uapi/app_profile.h
             fi
           fi
           
           # Create symlink for policy includes
-          rm -rf drivers/kernelsu/policy/uapi
-          if [ -d "drivers/kernelsu/uapi" ]; then
-            ln -sf ../uapi drivers/kernelsu/policy/uapi
+          rm -rf drivers/kernelsu/policy/uapi 2>/dev/null || true
+          mkdir -p drivers/kernelsu/uapi
+          ln -sf ../uapi drivers/kernelsu/policy/uapi
+          echo "  ✓ uapi symlink created"
+
+          # Try manual hook, fallback to inline if it fails
+          echo "ccflags-y += -DKSU_GIT_VERSION=\"\\\"ac539bd\\\"\"" >> drivers/kernelsu/Kbuild
+          
+          if python3 /tmp/inject_ksu_hooks.py 2>&1 | grep -q "target.*not found"; then
+            echo "  ⚠ Manual hook injection failed for 4.14 kernel, using inline hook instead"
+            USE_INLINE_HOOK=1
           else
-            mkdir -p drivers/kernelsu/uapi
-            ln -sf ../uapi drivers/kernelsu/policy/uapi
+            USE_INLINE_HOOK=0
           fi
 
-          printf '%s\n' \
-            '' \
-            '# KowSU — manual hook' \
-            'CONFIG_KSU=y' \
-            'CONFIG_KSU_MANUAL_HOOK=y' \
-            >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+          if [ "$USE_INLINE_HOOK" -eq 1 ]; then
+            printf '%s\n' \
+              '' \
+              '# KowSU — inline hook (fallback)' \
+              'CONFIG_KSU=y' \
+              'CONFIG_KSU_INLINE_HOOK=y' \
+              >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+            echo "  ✓ Using inline hook mode"
+          else
+            printf '%s\n' \
+              '' \
+              '# KowSU — manual hook' \
+              'CONFIG_KSU=y' \
+              'CONFIG_KSU_MANUAL_HOOK=y' \
+              >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+            echo "  ✓ Using manual hook mode"
+          fi
 
           grep -q "CONFIG_KSU_KPROBES_HOOK" drivers/kernelsu/Kconfig 2>/dev/null && \
             echo 'CONFIG_KSU_KPROBES_HOOK=n' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} || true
 
-          echo "  ✓ KowSU done"
+          echo "  ✓ KowSU integration complete"
 
       - name: Apply SUSFS Patches
         if: ${{ github.event.inputs.susfs_enabled == 'true' && matrix.variant != 'vanilla' }}
