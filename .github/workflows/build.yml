@@ -3,27 +3,26 @@ name: Build Kernel
 on:
   workflow_dispatch:
     inputs:
-      # ─── Root Manager ────────────────────────────────────────────────────────
-      root_manager:
-        description: "Root Manager"
-        required: true
-        default: "kernelsu_next"
-        type: choice
-        options:
-          - "kernelsu_next"
-          - "kowsu"
-          - "none"
-
-      kowsu_variant:
-        description: "KowSU Variant (only used when root_manager=kowsu)"
+      # ── Variants (select one or more — at least one required) ─────────────────
+      build_kernelsu_next:
+        description: "✅ Build with KernelSU Next (manual hook)"
         required: false
-        default: "manager"
-        type: choice
-        options:
-          - "manager"
-          - "systemless"
+        default: true
+        type: boolean
 
-      # ─── Feature Toggles ─────────────────────────────────────────────────────
+      build_kowsu:
+        description: "✅ Build with KowSU (manual hook)"
+        required: false
+        default: false
+        type: boolean
+
+      build_vanilla:
+        description: "✅ Build Vanilla (no root manager)"
+        required: false
+        default: false
+        type: boolean
+
+      # ── Feature Toggles ──────────────────────────────────────────────────────
       susfs_enabled:
         description: "Enable SUSFS"
         required: false
@@ -42,14 +41,12 @@ on:
         default: true
         type: boolean
 
-      # ─── Release ─────────────────────────────────────────────────────────────
       release:
         description: "Create GitHub Release"
         required: false
         default: true
         type: boolean
 
-# ─── Environment ───────────────────────────────────────────────────────────────
 env:
   DEVICE: sweet
   DEVICE_DEFCONFIG: sweet_defconfig
@@ -61,9 +58,51 @@ env:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 jobs:
-  build:
-    name: "Build [${{ github.event.inputs.root_manager }}] for sweet"
+
+  # ── Job 1: Validate + build matrix ─────────────────────────────────────────
+  setup:
+    name: Validate & Prepare Matrix
     runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+    steps:
+      - name: Require At Least One Variant
+        run: |
+          if [ "${{ github.event.inputs.build_kernelsu_next }}" != "true" ] && \
+             [ "${{ github.event.inputs.build_kowsu }}"         != "true" ] && \
+             [ "${{ github.event.inputs.build_vanilla }}"       != "true" ]; then
+            echo "❌ ERROR: Select at least one build variant!"
+            exit 1
+          fi
+          echo "✅ Validation passed"
+
+      - name: Build Matrix JSON
+        id: matrix
+        run: |
+          VARIANTS=()
+          [ "${{ github.event.inputs.build_kernelsu_next }}" = "true" ] && VARIANTS+=("kernelsu_next")
+          [ "${{ github.event.inputs.build_kowsu }}"         = "true" ] && VARIANTS+=("kowsu")
+          [ "${{ github.event.inputs.build_vanilla }}"       = "true" ] && VARIANTS+=("vanilla")
+
+          JSON="["
+          for i in "${!VARIANTS[@]}"; do
+            [ $i -gt 0 ] && JSON+=","
+            JSON+="\"${VARIANTS[$i]}\""
+          done
+          JSON+="]"
+
+          echo "Matrix: $JSON"
+          echo "value=$JSON" >> $GITHUB_OUTPUT
+
+  # ── Job 2: Matrix build ─────────────────────────────────────────────────────
+  build:
+    name: "[${{ matrix.variant }}] sweet"
+    needs: setup
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        variant: ${{ fromJson(needs.setup.outputs.matrix) }}
+      fail-fast: false
 
     steps:
       # ── 1. Checkout ──────────────────────────────────────────────────────────
@@ -73,7 +112,6 @@ jobs:
       # ── 2. Kernel Source ─────────────────────────────────────────────────────
       - name: Download Kernel Source
         run: |
-          echo "Cloning kernel source..."
           git clone --depth=1 \
             https://github.com/PixelOS-Devices/android_kernel_xiaomi_sm6150 \
             ${{ env.KERNEL_DIR }} -b sixteen-qpr2
@@ -91,41 +129,34 @@ jobs:
             lib32z1-dev libtinfo5 openssl pahole python3 repo \
             rsync schedtool wget zip zlib1g-dev
 
-          echo "Downloading AOSP Clang ${{ env.CLANG_VERSION }}..."
           mkdir -p toolchain/clang
           wget -q \
             "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-${{ env.CLANG_VERSION }}.tar.gz" \
             -O toolchain/clang.tar.gz
           tar -xzf toolchain/clang.tar.gz -C toolchain/clang
-          echo "Clang ready: $(toolchain/clang/bin/clang --version | head -1)"
+          echo "Clang: $(toolchain/clang/bin/clang --version | head -1)"
 
       # ── 4. LN8000 Patches ────────────────────────────────────────────────────
       - name: Apply LN8000 Patches
         run: |
           cd ${{ env.KERNEL_DIR }}
-          echo "Applying LN8000 patches..."
-
           PATCHES=(
             "https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150/commit/7b73f853977d2c016e30319dffb1f49957d30b40.patch"
             "https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150/commit/63dddc108d57dc43e1cd0da0f1445875f760cf97.patch"
           )
-
           for patch in "${PATCHES[@]}"; do
             echo "  → $patch"
             if curl -sf "$patch" | patch -p1 --dry-run > /dev/null 2>&1; then
-              curl -sf "$patch" | patch -p1 --fuzz=2 || echo "  ⚠ Patch may already be applied"
+              curl -sf "$patch" | patch -p1 --fuzz=2 || echo "  ⚠ already applied"
             else
-              echo "  ⚠ Patch does not apply cleanly, skipping"
+              echo "  ⚠ skipped (does not apply)"
             fi
           done
 
-      # ── 5. Kprobes / LTO Pre-requisites ──────────────────────────────────────
-      - name: Apply LTO Fixes & Enable Kprobes
+      # ── 5. Kprobes in defconfig ───────────────────────────────────────────────
+      - name: Enable CONFIG_KPROBES
         run: |
           cd ${{ env.KERNEL_DIR }}
-          echo "Enabling CONFIG_KPROBES for 4.14 compatibility..."
-
-          # Replace disabled entry or append if absent
           if grep -q "# CONFIG_KPROBES is not set" arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}; then
             sed -i 's/# CONFIG_KPROBES is not set/CONFIG_KPROBES=y/' \
               arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
@@ -133,256 +164,163 @@ jobs:
             echo "CONFIG_KPROBES=y" >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           fi
 
-      # ── 6a. KernelSU Next — Manual Hook Method ────────────────────────────────
-      - name: Integrate KernelSU Next (Manual Hook)
-        if: ${{ github.event.inputs.root_manager == 'kernelsu_next' }}
+      # ── 6. Shared manual-hook Python script ───────────────────────────────────
+      # Written once, used by both KernelSU Next and KowSU steps below.
+      - name: Write Hook Injector Script
+        if: matrix.variant != 'vanilla'
         run: |
-          cd ${{ env.KERNEL_DIR }}
-          echo "Integrating KernelSU Next via manual hook (no kprobes dependency)..."
-
-          # ── Clone driver ────────────────────────────────────────────────────
-          git clone --depth=1 "${{ env.KERNELSU_NEXT_REPO }}" ../ksu_next_src
-
-          # KernelSU-Next stores the in-tree driver under kernel/
-          cp -r ../ksu_next_src/kernel drivers/kernelsu
-          echo "  ✓ KernelSU driver files → drivers/kernelsu"
-
-          # ── Wire into build system ──────────────────────────────────────────
-          if ! grep -q "kernelsu" drivers/Makefile; then
-            printf '\n# KernelSU Next (manual hook)\nobj-y += kernelsu/\n' \
-              >> drivers/Makefile
-            echo "  ✓ drivers/Makefile updated"
-          fi
-
-          if ! grep -q "kernelsu" drivers/Kconfig; then
-            sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-            echo "  ✓ drivers/Kconfig updated"
-          fi
-
-          # ── Inject manual hooks via Python (reliable, no fragile sed) ──────
-          python3 << 'PYEOF'
+          cat > /tmp/inject_ksu_hooks.py << 'PYEOF'
           import re, sys
 
-          # ────────────────────────────────────────────────────────────────────
-          # Helper: insert a line BEFORE the first line matching a pattern
-          # inside a given function body (starts at 'def_pattern').
-          # ────────────────────────────────────────────────────────────────────
           def inject_before_pattern(src, func_pattern, target_pattern, injection):
               lines = src.split('\n')
-              in_func = False
-              depth = 0
-              injected = False
-              result = []
+              in_func, depth, injected, result = False, 0, False, []
               for line in lines:
-                  if not in_func:
-                      if re.search(func_pattern, line):
-                          in_func = True
-                          depth = 0
+                  if not in_func and re.search(func_pattern, line):
+                      in_func, depth = True, 0
                   if in_func and not injected:
                       depth += line.count('{') - line.count('}')
                       if re.search(target_pattern, line):
                           result.append(injection)
                           injected = True
                       if depth <= 0:
-                          in_func = False   # left the function without injecting
+                          in_func = False
                   result.append(line)
               if not injected:
-                  print(f"  ⚠  Could not find target '{target_pattern}' inside '{func_pattern}'", flush=True)
+                  print(f"  ⚠  target '{target_pattern}' not found in '{func_pattern}'")
               return '\n'.join(result), injected
 
-          # ════════════════════════════════════════════════════════════════════
-          # 1.  fs/exec.c  →  hook do_execveat_common
-          # ════════════════════════════════════════════════════════════════════
+          # ── fs/exec.c ──────────────────────────────────────────────────────────
           EXEC_DECL = (
               'extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,\n'
               '\tvoid *argv, void *envp, int *flags);\n'
           )
           EXEC_HOOK = '\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);\n'
 
-          with open('fs/exec.c', 'r') as f:
-              src = f.read()
+          with open('fs/exec.c') as f: src = f.read()
 
           if 'ksu_handle_execveat' in src:
-              print('  ℹ  fs/exec.c already patched', flush=True)
+              print('  ℹ  fs/exec.c already patched')
           else:
-              # Add declaration after the last #include line in the file header
-              include_end = 0
-              for m in re.finditer(r'^#include\s+[<"]', src, re.MULTILINE):
-                  include_end = m.end()
-              ins_pos = src.index('\n', include_end) + 1
-              src = src[:ins_pos] + '\n' + EXEC_DECL + src[ins_pos:]
+              # Append declaration after last #include
+              end = max(m.end() for m in re.finditer(r'^#include\s+[<"]', src, re.MULTILINE))
+              pos = src.index('\n', end) + 1
+              src = src[:pos] + '\n' + EXEC_DECL + src[pos:]
+              kw = r'bprm_execve\s*\(' if 'bprm_execve' in src else r'search_binary_handler\s*\('
+              src, ok = inject_before_pattern(src, r'\bdo_execveat_common\b', kw, EXEC_HOOK)
+              with open('fs/exec.c', 'w') as f: f.write(src)
+              print(f"  {'✓' if ok else '⚠'} fs/exec.c patched")
 
-              # Determine call-site keyword (4.14 uses search_binary_handler)
-              if 'bprm_execve' in src:
-                  target_kw = r'bprm_execve\s*\('
-              else:
-                  target_kw = r'search_binary_handler\s*\('
-
-              src, ok = inject_before_pattern(
-                  src,
-                  func_pattern=r'\bdo_execveat_common\b',
-                  target_pattern=target_kw,
-                  injection=EXEC_HOOK,
-              )
-              with open('fs/exec.c', 'w') as f:
-                  f.write(src)
-              status = '✓' if ok else '⚠ (partial)'
-              print(f'  {status} fs/exec.c patched', flush=True)
-
-          # ════════════════════════════════════════════════════════════════════
-          # 2.  fs/open.c  →  hook do_faccessat / sys_faccessat
-          # ════════════════════════════════════════════════════════════════════
+          # ── fs/open.c ──────────────────────────────────────────────────────────
           OPEN_DECL = (
               'extern int ksu_handle_faccessat(int *dfd,\n'
               '\tconst char __user **filename_user, int *mode, int *flags);\n'
           )
-          # Place hook right after the opening brace of the function
           OPEN_HOOK = '\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);\n'
 
-          with open('fs/open.c', 'r') as f:
-              src = f.read()
+          with open('fs/open.c') as f: src = f.read()
 
           if 'ksu_handle_faccessat' in src:
-              print('  ℹ  fs/open.c already patched', flush=True)
+              print('  ℹ  fs/open.c already patched')
           else:
-              # Add declaration
-              include_end = 0
-              for m in re.finditer(r'^#include\s+[<"]', src, re.MULTILINE):
-                  include_end = m.end()
-              ins_pos = src.index('\n', include_end) + 1
-              src = src[:ins_pos] + '\n' + OPEN_DECL + src[ins_pos:]
-
-              # Find the right function name (4.14 may use sys_faccessat)
-              if 'do_faccessat' in src:
-                  func_pat = r'\bdo_faccessat\b'
-              else:
-                  func_pat = r'\bsys_faccessat\b'
-
-              # Inject after the first '{' of the function (after any variable decls,
-              # before the actual logic) — target the first "if (" inside the body.
-              src, ok = inject_before_pattern(
-                  src,
-                  func_pattern=func_pat,
-                  target_pattern=r'^\s+if\s*\(',
-                  injection=OPEN_HOOK,
-              )
-              with open('fs/open.c', 'w') as f:
-                  f.write(src)
-              status = '✓' if ok else '⚠ (partial)'
-              print(f'  {status} fs/open.c patched', flush=True)
+              end = max(m.end() for m in re.finditer(r'^#include\s+[<"]', src, re.MULTILINE))
+              pos = src.index('\n', end) + 1
+              src = src[:pos] + '\n' + OPEN_DECL + src[pos:]
+              fpat = r'\bdo_faccessat\b' if 'do_faccessat' in src else r'\bsys_faccessat\b'
+              src, ok = inject_before_pattern(src, fpat, r'^\s+if\s*\(', OPEN_HOOK)
+              with open('fs/open.c', 'w') as f: f.write(src)
+              print(f"  {'✓' if ok else '⚠'} fs/open.c patched")
 
           sys.exit(0)
           PYEOF
+          echo "  ✓ Hook injector script written"
 
-          # ── Defconfig entries ───────────────────────────────────────────────
+      # ── 7a. KernelSU Next ─────────────────────────────────────────────────────
+      - name: Integrate KernelSU Next (Manual Hook)
+        if: matrix.variant == 'kernelsu_next'
+        run: |
+          cd ${{ env.KERNEL_DIR }}
+          echo "── KernelSU Next: manual hook ──"
+
+          git clone --depth=1 "${{ env.KERNELSU_NEXT_REPO }}" ../ksu_src
+          cp -r ../ksu_src/kernel drivers/kernelsu
+          echo "  ✓ driver files → drivers/kernelsu"
+
+          grep -q "kernelsu" drivers/Makefile || \
+            printf '\n# KernelSU Next\nobj-y += kernelsu/\n' >> drivers/Makefile
+          grep -q "kernelsu" drivers/Kconfig || \
+            sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+
+          python3 /tmp/inject_ksu_hooks.py
+
           printf '%s\n' \
             '' \
-            '# KernelSU Next — manual hook (no kprobes required)' \
+            '# KernelSU Next — manual hook' \
             'CONFIG_KSU=y' \
             'CONFIG_KSU_MANUAL_HOOK=y' \
             >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
 
-          # Disable kprobes hook explicitly if the config key exists
-          if grep -q "CONFIG_KSU_KPROBES_HOOK" drivers/kernelsu/Kconfig 2>/dev/null; then
-            printf 'CONFIG_KSU_KPROBES_HOOK=n\n' \
-              >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
-          fi
+          grep -q "CONFIG_KSU_KPROBES_HOOK" drivers/kernelsu/Kconfig 2>/dev/null && \
+            echo 'CONFIG_KSU_KPROBES_HOOK=n' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} || true
 
-          echo "  ✓ KernelSU Next manual hook integration complete"
+          echo "  ✓ KernelSU Next done"
 
-      # ── 6b. KowSU Integration ─────────────────────────────────────────────────
-      - name: Integrate KowSU
-        if: ${{ github.event.inputs.root_manager == 'kowsu' }}
+      # ── 7b. KowSU ────────────────────────────────────────────────────────────
+      - name: Integrate KowSU (Manual Hook)
+        if: matrix.variant == 'kowsu'
         run: |
           cd ${{ env.KERNEL_DIR }}
-          echo "Integrating KowSU from ${{ env.KOWSU_REPO }}..."
+          echo "── KowSU: manual hook ──"
 
-          git clone --depth=1 "${{ env.KOWSU_REPO }}" ../kowsu_src
+          git clone --depth=1 "${{ env.KOWSU_REPO }}" ../ksu_src
+          cp -r ../ksu_src/kernel drivers/kernelsu
+          echo "  ✓ driver files → drivers/kernelsu"
 
-          # Copy driver
-          cp -r ../kowsu_src/kernel drivers/kernelsu
-          echo "  ✓ KowSU driver files copied to drivers/kernelsu"
-
-          if ! grep -q "kernelsu" drivers/Makefile; then
+          grep -q "kernelsu" drivers/Makefile || \
             printf '\n# KowSU\nobj-y += kernelsu/\n' >> drivers/Makefile
-          fi
-
-          if ! grep -q "kernelsu" drivers/Kconfig; then
+          grep -q "kernelsu" drivers/Kconfig || \
             sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          fi
 
-          # Variant config
-          if [ "${{ github.event.inputs.kowsu_variant }}" = "systemless" ]; then
-            echo "  Configuring KowSU systemless mode..."
-            printf '%s\n' \
-              '' \
-              '# KowSU Systemless Configuration' \
-              'CONFIG_KSU=y' \
-              'CONFIG_KOWSU_MODE_SYSTEMLESS=y' \
-              >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
-          else
-            echo "  Configuring KowSU manager mode..."
-            printf '%s\n' \
-              '' \
-              '# KowSU Manager Configuration' \
-              'CONFIG_KSU=y' \
-              'CONFIG_KOWSU_MODE_MANAGER=y' \
-              >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
-          fi
+          python3 /tmp/inject_ksu_hooks.py
 
           printf '%s\n' \
             '' \
-            '# KowSU Kprobes Support (4.14 compatible)' \
-            'CONFIG_KPROBES=y' \
-            'CONFIG_KPROBES_ON_FTRACE=y' \
-            'CONFIG_HAVE_KPROBES=y' \
-            'CONFIG_KRETPROBES=y' \
-            'CONFIG_HAVE_KRETPROBES=y' \
-            'CONFIG_HAVE_REGS_AND_STACK_ACCESS_API=y' \
+            '# KowSU — manual hook' \
+            'CONFIG_KSU=y' \
+            'CONFIG_KSU_MANUAL_HOOK=y' \
             >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
 
-          echo "  ✓ KowSU integration complete"
+          grep -q "CONFIG_KSU_KPROBES_HOOK" drivers/kernelsu/Kconfig 2>/dev/null && \
+            echo 'CONFIG_KSU_KPROBES_HOOK=n' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} || true
 
-      # ── 7. SUSFS ─────────────────────────────────────────────────────────────
+          echo "  ✓ KowSU done"
+
+      # ── 8. SUSFS ─────────────────────────────────────────────────────────────
       - name: Apply SUSFS Patches
-        if: ${{ github.event.inputs.susfs_enabled == 'true' }}
+        if: ${{ github.event.inputs.susfs_enabled == 'true' && matrix.variant != 'vanilla' }}
         run: |
           cd ${{ env.KERNEL_DIR }}
-          echo "Applying SUSFS patches..."
-
           SUSFS_URL="https://github.com/JackA1ltMan/susfs4ksu/raw/main/ksu_next.patch"
-
           if curl -Lsf "$SUSFS_URL" | patch -p1 --dry-run > /dev/null 2>&1; then
-            curl -Lsf "$SUSFS_URL" | patch -s -p1 --fuzz=5 \
-              || echo "  ⚠ SUSFS patch failed or already applied"
+            curl -Lsf "$SUSFS_URL" | patch -s -p1 --fuzz=5 || echo "  ⚠ SUSFS patch failed"
             echo "  ✓ SUSFS applied"
           else
             echo "  ⚠ SUSFS patch does not apply cleanly, skipping"
           fi
 
-      # ── 8. AVC Spoofing & SELinux Hiding ─────────────────────────────────────
+      # ── 9. AVC / SELinux ─────────────────────────────────────────────────────
       - name: Configure AVC Spoofing & SELinux Hiding
         if: ${{ github.event.inputs.avc_spoof == 'true' || github.event.inputs.hide_selinux == 'true' }}
         run: |
           cd ${{ env.KERNEL_DIR }}
-
           if [ "${{ github.event.inputs.avc_spoof }}" = "true" ]; then
-            echo "  Enabling AVC Log Spoofing..."
-            printf '%s\n' \
-              '' \
-              '# AVC Log Spoofing' \
-              'CONFIG_AUDIT=y' \
-              'CONFIG_AUDIT_ARCH=y' \
-              'CONFIG_AUDITSYSCALL=y' \
-              'CONFIG_AUDIT_GENERIC=y' \
+            printf '%s\n' '' '# AVC Log Spoofing' \
+              'CONFIG_AUDIT=y' 'CONFIG_AUDIT_ARCH=y' \
+              'CONFIG_AUDITSYSCALL=y' 'CONFIG_AUDIT_GENERIC=y' \
               >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           fi
-
           if [ "${{ github.event.inputs.hide_selinux }}" = "true" ]; then
-            echo "  Enabling SELinux Hiding..."
-            printf '%s\n' \
-              '' \
-              '# SELinux Hiding' \
+            printf '%s\n' '' '# SELinux Hiding' \
               'CONFIG_SECURITY_SELINUX=y' \
               'CONFIG_SECURITY_SELINUX_BOOTPARAM=y' \
               'CONFIG_SECURITY_SELINUX_DEVELOP=y' \
@@ -391,7 +329,7 @@ jobs:
               >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           fi
 
-      # ── 9. Deduplicate Defconfig ──────────────────────────────────────────────
+      # ── 10. Dedup defconfig ───────────────────────────────────────────────────
       - name: Deduplicate Defconfig
         run: |
           cd ${{ env.KERNEL_DIR }}
@@ -399,40 +337,31 @@ jobs:
             > arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}.tmp
           mv arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}.tmp \
              arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
-          echo "Defconfig (last 30 lines after all patches):"
-          tail -30 arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+          echo "Defconfig tail:"
+          tail -20 arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
 
-      # ── 10. Build ─────────────────────────────────────────────────────────────
+      # ── 11. Build ─────────────────────────────────────────────────────────────
       - name: Build Kernel
         run: |
           cd ${{ env.KERNEL_DIR }}
-          echo "Starting kernel build..."
-
           export PATH=${{ github.workspace }}/toolchain/clang/bin:$PATH
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CC=clang
-          export CXX=clang++
-          export LD=ld.lld
-          export AR=llvm-ar
-          export NM=llvm-nm
-          export OBJCOPY=llvm-objcopy
-          export OBJDUMP=llvm-objdump
-          export STRIP=llvm-strip
+          export CC=clang CXX=clang++ LD=ld.lld
+          export AR=llvm-ar NM=llvm-nm
+          export OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
 
           make O=out ARCH=${{ env.ARCH }} ${{ env.DEVICE_DEFCONFIG }}
 
-          LOCALVER="-${{ github.event.inputs.root_manager }}-${{ env.DEVICE }}"
           make -j$(nproc) O=out ARCH=${{ env.ARCH }} \
-            LLVM=1 \
-            LTO=thin \
-            LOCALVERSION="${LOCALVER}" \
+            LLVM=1 LTO=thin \
+            LOCALVERSION="-${{ matrix.variant }}-${{ env.DEVICE }}" \
             Image.gz dtbs
 
           echo "Build complete!"
           ls -lh out/arch/arm64/boot/
 
-      # ── 11. Timestamps ────────────────────────────────────────────────────────
+      # ── 12. Timestamps ────────────────────────────────────────────────────────
       - name: Set Build Date
         id: date
         run: echo "value=$(date +%Y%m%d)" >> $GITHUB_OUTPUT
@@ -441,12 +370,9 @@ jobs:
         id: timestamp
         run: echo "value=$(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_OUTPUT
 
-      # ── 12. AnyKernel3 ZIP ───────────────────────────────────────────────────
+      # ── 13. AnyKernel3 ZIP ───────────────────────────────────────────────────
       - name: Prepare Flashable ZIP
         run: |
-          cd ${{ github.workspace }}
-          echo "Packing AnyKernel3 ZIP..."
-
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AK3
           cd AK3
 
@@ -457,13 +383,10 @@ jobs:
           sed -i 's/device.name1=.*/device.name1=sweet/' anykernel.sh
           sed -i 's/device.name2=.*/device.name2=sweetin/' anykernel.sh
 
-          ZIPNAME="kernel-sweet-${{ github.event.inputs.root_manager }}-${{ steps.date.outputs.value }}"
-          [ "${{ github.event.inputs.root_manager }}" = "kowsu" ] && \
-            ZIPNAME="${ZIPNAME}-${{ github.event.inputs.kowsu_variant }}"
+          ZIPNAME="kernel-sweet-${{ matrix.variant }}-${{ steps.date.outputs.value }}"
 
           cat > metadata.txt << EOF
-          ROOT_MANAGER=${{ github.event.inputs.root_manager }}
-          KOWSU_VARIANT=${{ github.event.inputs.kowsu_variant }}
+          VARIANT=${{ matrix.variant }}
           SUSFS=${{ github.event.inputs.susfs_enabled }}
           AVC_SPOOF=${{ github.event.inputs.avc_spoof }}
           HIDE_SELINUX=${{ github.event.inputs.hide_selinux }}
@@ -471,61 +394,52 @@ jobs:
           BUILD_DATE=${{ steps.timestamp.outputs.value }}
           EOF
 
-          zip -r9 ../${ZIPNAME}.zip . \
-            -x ".git/*" "*.git" "kernel/*" "scripts/*" "patches/*"
-
+          zip -r9 ../${ZIPNAME}.zip . -x ".git/*" "*.git" "kernel/*" "scripts/*" "patches/*"
           echo "ZIP_NAME=${ZIPNAME}" >> $GITHUB_ENV
 
-      # ── 13. Upload Artifacts ──────────────────────────────────────────────────
+      # ── 14. Upload ────────────────────────────────────────────────────────────
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-artifacts-${{ github.event.inputs.root_manager }}
+          name: kernel-${{ matrix.variant }}-${{ steps.date.outputs.value }}
           path: |
-            kernel-sweet-*.zip
-            kernel/out/arch/arm64/boot/Image.gz
-            kernel/out/arch/arm64/boot/dts/**/*.dtb
+            kernel-sweet-${{ matrix.variant }}-*.zip
+            ${{ env.KERNEL_DIR }}/out/arch/arm64/boot/Image.gz
+            ${{ env.KERNEL_DIR }}/out/arch/arm64/boot/dts/**/*.dtb
           retention-days: 30
 
-      # ── 14. GitHub Release ────────────────────────────────────────────────────
+      # ── 15. Release ───────────────────────────────────────────────────────────
       - name: Create Release
         if: ${{ github.event.inputs.release == 'true' }}
         uses: softprops/action-gh-release@v1
         with:
-          files: kernel-sweet-*.zip
-          tag_name: kernel-${{ env.DEVICE }}-${{ github.event.inputs.root_manager }}-${{ steps.date.outputs.value }}
+          files: kernel-sweet-${{ matrix.variant }}-*.zip
+          tag_name: kernel-${{ env.DEVICE }}-${{ matrix.variant }}-${{ steps.date.outputs.value }}
           body: |
-            # Kernel Build for ${{ env.DEVICE }} (Redmi Note 10 Pro)
-
-            **Root Manager:** `${{ github.event.inputs.root_manager }}`
-            ${{ github.event.inputs.root_manager == 'kowsu' && format('**KowSU Variant:** `{0}`', github.event.inputs.kowsu_variant) || '' }}
-            ${{ github.event.inputs.root_manager == 'kernelsu_next' && '> Integrated via **manual hook** (no kprobes dependency)' || '' }}
+            # Kernel [${{ matrix.variant }}] for ${{ env.DEVICE }} (Redmi Note 10 Pro)
 
             | Feature | Status |
             |---------|--------|
-            | SUSFS | ${{ github.event.inputs.susfs_enabled == 'true' && '✅ Enabled' || '❌ Disabled' }} |
-            | AVC Log Spoofing | ${{ github.event.inputs.avc_spoof == 'true' && '✅ Enabled' || '❌ Disabled' }} |
-            | SELinux Hiding | ${{ github.event.inputs.hide_selinux == 'true' && '✅ Enabled' || '❌ Disabled' }} |
+            | Root Manager | `${{ matrix.variant }}` |
+            | Hook Method | Manual (no kprobes) |
+            | SUSFS | ${{ github.event.inputs.susfs_enabled == 'true' && '✅' || '❌' }} |
+            | AVC Log Spoofing | ${{ github.event.inputs.avc_spoof == 'true' && '✅' || '❌' }} |
+            | SELinux Hiding | ${{ github.event.inputs.hide_selinux == 'true' && '✅' || '❌' }} |
 
-            **Build Info:**
-            - Kernel: 4.14.x · Device: sweet · Arch: arm64
-            - Compiler: AOSP Clang ${{ env.CLANG_VERSION }} · LTO: thin · LLVM: enabled
-            - Build Date: ${{ steps.timestamp.outputs.value }}
+            **Build:** 4.14.x · arm64 · AOSP Clang ${{ env.CLANG_VERSION }} · LTO thin · LLVM
+            **Date:** ${{ steps.timestamp.outputs.value }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── 15. Job Summary ───────────────────────────────────────────────────────
+      # ── 16. Summary ───────────────────────────────────────────────────────────
       - name: Build Summary
         if: always()
         run: |
-          echo "## 🔨 Kernel Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔨 [${{ matrix.variant }}] Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-----|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Device | ${{ env.DEVICE }} (Redmi Note 10 Pro) |" >> $GITHUB_STEP_SUMMARY
-          echo "| Root Manager | ${{ github.event.inputs.root_manager }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| KowSU Variant | ${{ github.event.inputs.kowsu_variant }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Variant | ${{ matrix.variant }} |" >> $GITHUB_STEP_SUMMARY
           echo "| SUSFS | ${{ github.event.inputs.susfs_enabled }} |" >> $GITHUB_STEP_SUMMARY
           echo "| AVC Spoofing | ${{ github.event.inputs.avc_spoof }} |" >> $GITHUB_STEP_SUMMARY
           echo "| SELinux Hiding | ${{ github.event.inputs.hide_selinux }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Kernel | 4.14.x |" >> $GITHUB_STEP_SUMMARY
           echo "| Compiler | AOSP Clang ${{ env.CLANG_VERSION }} |" >> $GITHUB_STEP_SUMMARY
