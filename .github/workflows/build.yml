@@ -140,64 +140,153 @@ jobs:
           cd ${{ env.KERNEL_DIR }}
           echo "Integrating KernelSU Next via manual hook (no kprobes dependency)..."
 
-          # Clone the KernelSU-Next driver source
+          # ── Clone driver ────────────────────────────────────────────────────
           git clone --depth=1 "${{ env.KERNELSU_NEXT_REPO }}" ../ksu_next_src
 
-          # Copy the KernelSU driver directory into kernel tree
+          # KernelSU-Next stores the in-tree driver under kernel/
           cp -r ../ksu_next_src/kernel drivers/kernelsu
-          echo "  ✓ KernelSU driver files copied to drivers/kernelsu"
+          echo "  ✓ KernelSU driver files → drivers/kernelsu"
 
-          # ── Patch drivers/Makefile ──────────────────────────────────────────
+          # ── Wire into build system ──────────────────────────────────────────
           if ! grep -q "kernelsu" drivers/Makefile; then
-            printf '\n# KernelSU Next\nobj-y += kernelsu/\n' >> drivers/Makefile
-            echo "  ✓ Added drivers/Makefile entry"
+            printf '\n# KernelSU Next (manual hook)\nobj-y += kernelsu/\n' \
+              >> drivers/Makefile
+            echo "  ✓ drivers/Makefile updated"
           fi
 
-          # ── Patch drivers/Kconfig ───────────────────────────────────────────
           if ! grep -q "kernelsu" drivers/Kconfig; then
             sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-            echo "  ✓ Added drivers/Kconfig source"
+            echo "  ✓ drivers/Kconfig updated"
           fi
 
-          # ── Patch fs/exec.c — call ksu_handle_execveat_sucompat ─────────────
-          # Insert after the first `return` from search_binary_handler so that
-          # we hook every exec without needing kprobes.
-          if ! grep -q "ksu_handle_execveat_sucompat" fs/exec.c; then
-            # Add extern declaration at top of file (after first #include block)
-            sed -i '/#include <linux\/binfmts.h>/a extern void ksu_handle_execveat_sucompat(int fd, struct filename *filename, void *argv, void *envp, int flags);' fs/exec.c
+          # ── Inject manual hooks via Python (reliable, no fragile sed) ──────
+          python3 << 'PYEOF'
+          import re, sys
 
-            # Hook inside do_execveat_common right before the bprm_execve call
-            # We target the line that calls bprm_execve (or search_binary_handler on older kernels)
-            if grep -q "bprm_execve" fs/exec.c; then
-              sed -i '/retval = bprm_execve(bprm/i\\t\tksu_handle_execveat_sucompat(fd, filename, argv, envp, flags);' fs/exec.c
-            else
-              sed -i '/retval = search_binary_handler(bprm/i\\t\tksu_handle_execveat_sucompat(fd, filename, argv, envp, flags);' fs/exec.c
-            fi
-            echo "  ✓ Patched fs/exec.c with ksu_handle_execveat_sucompat hook"
-          else
-            echo "  ℹ fs/exec.c already has KernelSU hook"
-          fi
+          # ────────────────────────────────────────────────────────────────────
+          # Helper: insert a line BEFORE the first line matching a pattern
+          # inside a given function body (starts at 'def_pattern').
+          # ────────────────────────────────────────────────────────────────────
+          def inject_before_pattern(src, func_pattern, target_pattern, injection):
+              lines = src.split('\n')
+              in_func = False
+              depth = 0
+              injected = False
+              result = []
+              for line in lines:
+                  if not in_func:
+                      if re.search(func_pattern, line):
+                          in_func = True
+                          depth = 0
+                  if in_func and not injected:
+                      depth += line.count('{') - line.count('}')
+                      if re.search(target_pattern, line):
+                          result.append(injection)
+                          injected = True
+                      if depth <= 0:
+                          in_func = False   # left the function without injecting
+                  result.append(line)
+              if not injected:
+                  print(f"  ⚠  Could not find target '{target_pattern}' inside '{func_pattern}'", flush=True)
+              return '\n'.join(result), injected
 
-          # ── Patch fs/open.c — call ksu_handle_faccessat ────────────────────
-          if ! grep -q "ksu_handle_faccessat" fs/open.c; then
-            sed -i '/#include <linux\/fsnotify.h>/a extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *flags);' fs/open.c
+          # ════════════════════════════════════════════════════════════════════
+          # 1.  fs/exec.c  →  hook do_execveat_common
+          # ════════════════════════════════════════════════════════════════════
+          EXEC_DECL = (
+              'extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,\n'
+              '\tvoid *argv, void *envp, int *flags);\n'
+          )
+          EXEC_HOOK = '\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);\n'
 
-            # Hook at the start of do_faccessat / sys_faccessat
-            if grep -q "do_faccessat" fs/open.c; then
-              sed -i '/^static long do_faccessat/{n; s/^\(.*\)$/\t\tksu_handle_faccessat(\&dfd, \&filename, \&mode, NULL);\n\1/}' fs/open.c || true
-            fi
-            echo "  ✓ Patched fs/open.c with ksu_handle_faccessat hook"
-          else
-            echo "  ℹ fs/open.c already has KernelSU hook"
-          fi
+          with open('fs/exec.c', 'r') as f:
+              src = f.read()
+
+          if 'ksu_handle_execveat' in src:
+              print('  ℹ  fs/exec.c already patched', flush=True)
+          else:
+              # Add declaration after the last #include line in the file header
+              include_end = 0
+              for m in re.finditer(r'^#include\s+[<"]', src, re.MULTILINE):
+                  include_end = m.end()
+              ins_pos = src.index('\n', include_end) + 1
+              src = src[:ins_pos] + '\n' + EXEC_DECL + src[ins_pos:]
+
+              # Determine call-site keyword (4.14 uses search_binary_handler)
+              if 'bprm_execve' in src:
+                  target_kw = r'bprm_execve\s*\('
+              else:
+                  target_kw = r'search_binary_handler\s*\('
+
+              src, ok = inject_before_pattern(
+                  src,
+                  func_pattern=r'\bdo_execveat_common\b',
+                  target_pattern=target_kw,
+                  injection=EXEC_HOOK,
+              )
+              with open('fs/exec.c', 'w') as f:
+                  f.write(src)
+              status = '✓' if ok else '⚠ (partial)'
+              print(f'  {status} fs/exec.c patched', flush=True)
+
+          # ════════════════════════════════════════════════════════════════════
+          # 2.  fs/open.c  →  hook do_faccessat / sys_faccessat
+          # ════════════════════════════════════════════════════════════════════
+          OPEN_DECL = (
+              'extern int ksu_handle_faccessat(int *dfd,\n'
+              '\tconst char __user **filename_user, int *mode, int *flags);\n'
+          )
+          # Place hook right after the opening brace of the function
+          OPEN_HOOK = '\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);\n'
+
+          with open('fs/open.c', 'r') as f:
+              src = f.read()
+
+          if 'ksu_handle_faccessat' in src:
+              print('  ℹ  fs/open.c already patched', flush=True)
+          else:
+              # Add declaration
+              include_end = 0
+              for m in re.finditer(r'^#include\s+[<"]', src, re.MULTILINE):
+                  include_end = m.end()
+              ins_pos = src.index('\n', include_end) + 1
+              src = src[:ins_pos] + '\n' + OPEN_DECL + src[ins_pos:]
+
+              # Find the right function name (4.14 may use sys_faccessat)
+              if 'do_faccessat' in src:
+                  func_pat = r'\bdo_faccessat\b'
+              else:
+                  func_pat = r'\bsys_faccessat\b'
+
+              # Inject after the first '{' of the function (after any variable decls,
+              # before the actual logic) — target the first "if (" inside the body.
+              src, ok = inject_before_pattern(
+                  src,
+                  func_pattern=func_pat,
+                  target_pattern=r'^\s+if\s*\(',
+                  injection=OPEN_HOOK,
+              )
+              with open('fs/open.c', 'w') as f:
+                  f.write(src)
+              status = '✓' if ok else '⚠ (partial)'
+              print(f'  {status} fs/open.c patched', flush=True)
+
+          sys.exit(0)
+          PYEOF
 
           # ── Defconfig entries ───────────────────────────────────────────────
           printf '%s\n' \
             '' \
-            '# KernelSU Next (Manual Hook)' \
+            '# KernelSU Next — manual hook (no kprobes required)' \
             'CONFIG_KSU=y' \
-            'CONFIG_KSU_KPROBES_HOOK=n' \
+            'CONFIG_KSU_MANUAL_HOOK=y' \
             >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+
+          # Disable kprobes hook explicitly if the config key exists
+          if grep -q "CONFIG_KSU_KPROBES_HOOK" drivers/kernelsu/Kconfig 2>/dev/null; then
+            printf 'CONFIG_KSU_KPROBES_HOOK=n\n' \
+              >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+          fi
 
           echo "  ✓ KernelSU Next manual hook integration complete"
 
