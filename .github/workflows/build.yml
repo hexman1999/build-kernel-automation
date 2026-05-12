@@ -44,7 +44,7 @@ on:
       release:
         description: "Create GitHub Release"
         required: false
-        default: true
+        default: false
         type: boolean
 
 permissions:
@@ -510,14 +510,31 @@ jobs:
           find ../${{ env.KERNEL_DIR }}/out/arch/arm64/boot/dts \
             -name "*.dtb" -exec cat {} + > dtb
 
+          # Configure AnyKernel3 for sweet device
+          echo "Configuring AnyKernel3 for sweet..."
+          
+          # Device configuration
           sed -i 's/device.name1=.*/device.name1=sweet/' anykernel.sh
           sed -i 's/device.name2=.*/device.name2=sweetin/' anykernel.sh
+          sed -i 's/is_slot_device=.*/is_slot_device=0/' anykernel.sh
           
-          # More aggressive block path fix
-          sed -i 's|^block=.*|block=/dev/block/bootdevice/by-name/boot;|' anykernel.sh
+          # Create device_specific.sh with block device configuration
+          cat > device_specific.sh << 'DEVEOF'
+          #!/bin/bash
+          BLOCK=/dev/block/bootdevice/by-name/boot
+          DEVEOF
           
-          sed -i 's/is_slot_device=.*/is_slot_device=0;/' anykernel.sh
+          # Replace the automatic block detection with our known path
+          # Find the line with block variable assignment and replace it
+          if grep -q "block=" anykernel.sh; then
+            sed -i 's|^block=.*|block=/dev/block/bootdevice/by-name/boot|' anykernel.sh
+          else
+            # If block variable doesn't exist, add it early in the script
+            sed -i '/#!/a block=/dev/block/bootdevice/by-name/boot' anykernel.sh
+          fi
           
+          sed -i 's/kernel.string=.*/kernel.string=Vantom Kernel - ${{ matrix.variant }}/' anykernel.sh
+
           # Map variant to friendly name
           V_NAME="${{ matrix.variant }}"
           case "$V_NAME" in
@@ -553,6 +570,31 @@ jobs:
           zip -r9 ../${ZIPNAME}.zip . -x ".git/*" "*.git" "kernel/*" "scripts/*" "patches/*"
           echo "ZIP_NAME=${ZIPNAME}" >> $GITHUB_ENV
 
+      - name: Generate Release Notes
+        run: |
+          cat > /tmp/release_body.md << 'RELEOF'
+          # Kernel [${{ matrix.variant }}] for ${{ env.DEVICE }} (Redmi Note 10 Pro)
+
+          | Feature | Status |
+          |---------|--------|
+          | Root Manager | `${{ matrix.variant }}` |
+          RELEOF
+
+          if [ "${{ matrix.variant }}" != "vanilla" ]; then
+            cat >> /tmp/release_body.md << 'RELEOF'
+          | Hook Method | Manual (no kprobes) |
+          | SUSFS | ${{ github.event.inputs.susfs_enabled == 'true' && '✅' || '❌' }} |
+          | AVC Log Spoofing | ${{ github.event.inputs.avc_spoof == 'true' && '✅' || '❌' }} |
+          | SELinux Hiding | ${{ github.event.inputs.hide_selinux == 'true' && '✅' || '❌' }} |
+          RELEOF
+          fi
+
+          cat >> /tmp/release_body.md << 'RELEOF'
+
+          **Build:** 4.14.x · arm64 · AOSP Clang ${{ env.CLANG_VERSION }} · LTO thin · LLVM
+          **Date:** ${{ steps.timestamp.outputs.value }}
+          RELEOF
+
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -566,19 +608,7 @@ jobs:
         with:
           files: ${{ env.ZIP_NAME }}.zip
           tag_name: ${{ env.ZIP_NAME }}-${{ steps.date.outputs.value }}
-          body: |
-            # Kernel [${{ matrix.variant }}] for ${{ env.DEVICE }} (Redmi Note 10 Pro)
-
-            | Feature | Status |
-            |---------|--------|
-            | Root Manager | `${{ matrix.variant }}` |
-            | Hook Method | Manual (no kprobes) |
-            | SUSFS | ${{ (github.event.inputs.susfs_enabled == 'true' && matrix.variant != 'vanilla') && '✅' || '❌' }} |
-            | AVC Log Spoofing | ${{ github.event.inputs.avc_spoof == 'true' && '✅' || '❌' }} |
-            | SELinux Hiding | ${{ github.event.inputs.hide_selinux == 'true' && '✅' || '❌' }} |
-
-            **Build:** 4.14.x · arm64 · AOSP Clang ${{ env.CLANG_VERSION }} · LTO thin · LLVM
-            **Date:** ${{ steps.timestamp.outputs.value }}
+          body_path: /tmp/release_body.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
