@@ -59,13 +59,16 @@ env:
 # ═══════════════════════════════════════════════════════════════════════════════
 jobs:
 
-  # ── Job 1: Validate + build matrix ─────────────────────────────────────────
+  # ── Job 1: Preparation (Clone, Patch Common, Prepare Matrix) ────────────────
   setup:
-    name: Validate & Prepare Matrix
+    name: Prepare Kernel Source & Matrix
     runs-on: ubuntu-22.04
     outputs:
       matrix: ${{ steps.matrix.outputs.value }}
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v5
+
       - name: Require At Least One Variant
         run: |
           if [ "${{ github.event.inputs.build_kernelsu_next }}" != "true" ] && \
@@ -94,6 +97,52 @@ jobs:
           echo "Matrix: $JSON"
           echo "value=$JSON" >> $GITHUB_OUTPUT
 
+      - name: Cache Raw Kernel Source
+        id: cache-kernel-raw
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.KERNEL_DIR }}
+          key: kernel-raw-sm6150-sixteen-qpr2
+
+      - name: Download Kernel Source
+        if: steps.cache-kernel-raw.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth=1 \
+            https://github.com/PixelOS-Devices/android_kernel_xiaomi_sm6150 \
+            ${{ env.KERNEL_DIR }} -b sixteen-qpr2
+
+      - name: Apply Common LN8000 Patches
+        run: |
+          cd ${{ env.KERNEL_DIR }}
+          PATCHES=(
+            "https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150/commit/7b73f853977d2c016e30319dffb1f49957d30b40.patch"
+            "https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150/commit/63dddc108d57dc43e1cd0da0f1445875f760cf97.patch"
+          )
+          for patch in "${PATCHES[@]}"; do
+            echo "  → $patch"
+            if curl -sf "$patch" | patch -p1 --dry-run > /dev/null 2>&1; then
+              curl -sf "$patch" | patch -p1 --fuzz=2 || echo "  ⚠ already applied"
+            else
+              echo "  ⚠ skipped (does not apply)"
+            fi
+          done
+
+      - name: Enable CONFIG_KPROBES in Base
+        run: |
+          cd ${{ env.KERNEL_DIR }}
+          if grep -q "# CONFIG_KPROBES is not set" arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}; then
+            sed -i 's/# CONFIG_KPROBES is not set/CONFIG_KPROBES=y/' \
+              arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+          elif ! grep -q "^CONFIG_KPROBES=y" arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}; then
+            echo "CONFIG_KPROBES=y" >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+          fi
+
+      - name: Cache Patched Kernel Source for Matrix
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.KERNEL_DIR }}
+          key: kernel-patched-${{ github.run_id }}
+
   # ── Job 2: Matrix build ─────────────────────────────────────────────────────
   build:
     name: "[${{ matrix.variant }}] sweet"
@@ -105,20 +154,16 @@ jobs:
       fail-fast: false
 
     steps:
-      # ── 1. Checkout ──────────────────────────────────────────────────────────
       - name: Checkout Repository
         uses: actions/checkout@v5
 
-      # ── 2. Kernel Source ─────────────────────────────────────────────────────
-      - name: Download Kernel Source
-        run: |
-          git clone --depth=1 \
-            https://github.com/PixelOS-Devices/android_kernel_xiaomi_sm6150 \
-            ${{ env.KERNEL_DIR }} -b sixteen-qpr2
-          cd ${{ env.KERNEL_DIR }}
-          git log --oneline -1
+      - name: Restore Patched Kernel Source
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.KERNEL_DIR }}
+          key: kernel-patched-${{ github.run_id }}
+          fail-on-cache-miss: true
 
-      # ── 3. Build Tools ───────────────────────────────────────────────────────
       - name: Install APT Dependencies
         run: |
           sudo apt-get update -qq
@@ -150,36 +195,6 @@ jobs:
         run: |
           echo "Clang: $(toolchain/clang/bin/clang --version | head -1)"
 
-      # ── 4. LN8000 Patches ────────────────────────────────────────────────────
-      - name: Apply LN8000 Patches
-        run: |
-          cd ${{ env.KERNEL_DIR }}
-          PATCHES=(
-            "https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150/commit/7b73f853977d2c016e30319dffb1f49957d30b40.patch"
-            "https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150/commit/63dddc108d57dc43e1cd0da0f1445875f760cf97.patch"
-          )
-          for patch in "${PATCHES[@]}"; do
-            echo "  → $patch"
-            if curl -sf "$patch" | patch -p1 --dry-run > /dev/null 2>&1; then
-              curl -sf "$patch" | patch -p1 --fuzz=2 || echo "  ⚠ already applied"
-            else
-              echo "  ⚠ skipped (does not apply)"
-            fi
-          done
-
-      # ── 5. Kprobes in defconfig ───────────────────────────────────────────────
-      - name: Enable CONFIG_KPROBES
-        run: |
-          cd ${{ env.KERNEL_DIR }}
-          if grep -q "# CONFIG_KPROBES is not set" arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}; then
-            sed -i 's/# CONFIG_KPROBES is not set/CONFIG_KPROBES=y/' \
-              arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
-          elif ! grep -q "^CONFIG_KPROBES=y" arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}; then
-            echo "CONFIG_KPROBES=y" >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
-          fi
-
-      # ── 6. Shared manual-hook Python script ───────────────────────────────────
-      # Written once, used by both KernelSU Next and KowSU steps below.
       - name: Write Hook Injector Script
         if: matrix.variant != 'vanilla'
         run: |
@@ -216,7 +231,6 @@ jobs:
           if 'ksu_handle_execveat' in src:
               print('  ℹ  fs/exec.c already patched')
           else:
-              # Append declaration after last #include
               end = max(m.end() for m in re.finditer(r'^#include\s+[<"]', src, re.MULTILINE))
               pos = src.index('\n', end) + 1
               src = src[:pos] + '\n' + EXEC_DECL + src[pos:]
@@ -249,7 +263,6 @@ jobs:
           PYEOF
           echo "  ✓ Hook injector script written"
 
-      # ── 7a. KernelSU Next ─────────────────────────────────────────────────────
       - name: Integrate KernelSU Next (Manual Hook)
         if: matrix.variant == 'kernelsu_next'
         run: |
@@ -279,7 +292,6 @@ jobs:
 
           echo "  ✓ KernelSU Next done"
 
-      # ── 7b. KowSU ────────────────────────────────────────────────────────────
       - name: Integrate KowSU (Manual Hook)
         if: matrix.variant == 'kowsu'
         run: |
@@ -309,7 +321,6 @@ jobs:
 
           echo "  ✓ KowSU done"
 
-      # ── 8. SUSFS ─────────────────────────────────────────────────────────────
       - name: Apply SUSFS Patches
         if: ${{ github.event.inputs.susfs_enabled == 'true' && matrix.variant != 'vanilla' }}
         run: |
@@ -322,7 +333,6 @@ jobs:
             echo "  ⚠ SUSFS patch does not apply cleanly, skipping"
           fi
 
-      # ── 9. AVC / SELinux ─────────────────────────────────────────────────────
       - name: Configure AVC Spoofing & SELinux Hiding
         if: ${{ github.event.inputs.avc_spoof == 'true' || github.event.inputs.hide_selinux == 'true' }}
         run: |
@@ -343,7 +353,6 @@ jobs:
               >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           fi
 
-      # ── 10. Dedup defconfig ───────────────────────────────────────────────────
       - name: Deduplicate Defconfig
         run: |
           cd ${{ env.KERNEL_DIR }}
@@ -354,7 +363,6 @@ jobs:
           echo "Defconfig tail:"
           tail -20 arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
 
-      # ── 11. Build ─────────────────────────────────────────────────────────────
       - name: Build Kernel
         run: |
           cd ${{ env.KERNEL_DIR }}
@@ -375,7 +383,6 @@ jobs:
           echo "Build complete!"
           ls -lh out/arch/arm64/boot/
 
-      # ── 12. Timestamps ────────────────────────────────────────────────────────
       - name: Set Build Date
         id: date
         run: echo "value=$(date +%Y%m%d)" >> $GITHUB_OUTPUT
@@ -384,7 +391,6 @@ jobs:
         id: timestamp
         run: echo "value=$(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_OUTPUT
 
-      # ── 13. AnyKernel3 ZIP ───────────────────────────────────────────────────
       - name: Prepare Flashable ZIP
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AK3
@@ -411,7 +417,6 @@ jobs:
           zip -r9 ../${ZIPNAME}.zip . -x ".git/*" "*.git" "kernel/*" "scripts/*" "patches/*"
           echo "ZIP_NAME=${ZIPNAME}" >> $GITHUB_ENV
 
-      # ── 14. Upload ────────────────────────────────────────────────────────────
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -422,7 +427,6 @@ jobs:
             ${{ env.KERNEL_DIR }}/out/arch/arm64/boot/dts/**/*.dtb
           retention-days: 30
 
-      # ── 15. Release ───────────────────────────────────────────────────────────
       - name: Create Release
         if: ${{ github.event.inputs.release == 'true' }}
         uses: softprops/action-gh-release@v1
@@ -445,7 +449,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── 16. Summary ───────────────────────────────────────────────────────────
       - name: Build Summary
         if: always()
         run: |
