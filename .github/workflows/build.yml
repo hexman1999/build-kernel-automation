@@ -484,7 +484,7 @@ jobs:
             | Root Manager | `${{ matrix.variant }}` |
             | Hook Method | Manual (no kprobes) |
             | SUSFS | ${{ (github.event.inputs.susfs_enabled == 'true' && matrix.variant != 'vanilla') && '✅' || '❌' }} |
-            | AVC Log Spoofing | ${{ github.event.inputs.avc_spoof == 'true' && '✅' || '❌' |
+            | AVC Log Spoofing | ${{ github.event.inputs.avc_spoof == 'true' && '✅' || '❌' }} |
             | SELinux Hiding | ${{ github.event.inputs.hide_selinux == 'true' && '✅' || '❌' }} |
 
             **Build:** 4.14.x · arm64 · AOSP Clang ${{ env.CLANG_VERSION }} · LTO thin · LLVM
