@@ -119,7 +119,7 @@ jobs:
           fi
           
           # 4.14 specific kprobes configuration
-          cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} << 'EOF'
+          cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
 # 4.14 Kernel - KernelSU Next Compatibility
 CONFIG_KPROBES_ON_FTRACE=y
 CONFIG_HAVE_KPROBES=y
@@ -155,7 +155,7 @@ EOF
           
           # Enable AVC log spoofing
           if [ "${{ github.event.inputs.avc_spoof }}" = "true" ]; then
-            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} << 'EOF'
+            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
 # AVC Log Spoofing Support
 CONFIG_AUDIT=y
 CONFIG_AUDIT_ARCH=y
@@ -164,7 +164,7 @@ EOF
           
           # Enable SELinux modifications
           if [ "${{ github.event.inputs.hide_selinux }}" = "true" ]; then
-            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} << 'EOF'
+            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
 # SELinux Modifications Support
 CONFIG_SECURITY_SELINUX=y
 CONFIG_SECURITY_SELINUX_BOOTPARAM=y
@@ -189,7 +189,7 @@ EOF
           fi
           
           # Add Kowsu configuration
-          cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} << 'EOF'
+          cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
 # Kowsu support (requires CONFIG_KPROBES)
 CONFIG_KPROBES=y
 EOF

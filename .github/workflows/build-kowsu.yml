@@ -133,20 +133,20 @@ jobs:
           # Configure Kowsu variant
           if [ "${{ github.event.inputs.kowsu_variant }}" = "systemless" ]; then
             echo "Configuring Kowsu systemless mode..."
-            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} << 'EOF'
+            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
 # Kowsu Systemless Configuration
 CONFIG_KOWSU_MODE=systemless
 EOF
           else
             echo "Configuring Kowsu manager mode..."
-            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} << 'EOF'
+            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
 # Kowsu Manager Configuration
 CONFIG_KOWSU_MODE=manager
 EOF
           fi
           
           # Essential Kowsu/Kprobes configuration for 4.14
-          cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} << 'EOF'
+          cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
 
 # Kowsu Support - Kprobes Required (4.14 compatible)
 CONFIG_KPROBES=y
@@ -179,7 +179,7 @@ EOF
           
           # Enable AVC log spoofing
           if [ "${{ github.event.inputs.avc_spoof }}" = "true" ]; then
-            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} << 'EOF'
+            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
 
 # AVC Log Spoofing Support for Kowsu
 CONFIG_AUDIT=y
@@ -191,7 +191,7 @@ EOF
           
           # Enable SELinux modifications support
           if [ "${{ github.event.inputs.hide_selinux }}" = "true" ]; then
-            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} << 'EOF'
+            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
 
 # SELinux Modifications Support with Kowsu
 CONFIG_SECURITY_SELINUX=y
