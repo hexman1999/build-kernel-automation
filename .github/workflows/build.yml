@@ -119,7 +119,7 @@ jobs:
           git log --oneline -1
 
       # ── 3. Build Tools ───────────────────────────────────────────────────────
-      - name: Setup Build Environment
+      - name: Install APT Dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
@@ -129,11 +129,25 @@ jobs:
             lib32z1-dev libtinfo5 openssl pahole python3 repo \
             rsync schedtool wget zip zlib1g-dev
 
+      - name: Cache AOSP Clang Toolchain
+        id: cache-clang
+        uses: actions/cache@v4
+        with:
+          path: toolchain/clang
+          key: aosp-clang-${{ env.CLANG_VERSION }}
+
+      - name: Download AOSP Clang (cache miss only)
+        if: steps.cache-clang.outputs.cache-hit != 'true'
+        run: |
           mkdir -p toolchain/clang
           wget -q \
             "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-${{ env.CLANG_VERSION }}.tar.gz" \
             -O toolchain/clang.tar.gz
           tar -xzf toolchain/clang.tar.gz -C toolchain/clang
+          rm toolchain/clang.tar.gz
+
+      - name: Verify Clang
+        run: |
           echo "Clang: $(toolchain/clang/bin/clang --version | head -1)"
 
       # ── 4. LN8000 Patches ────────────────────────────────────────────────────
