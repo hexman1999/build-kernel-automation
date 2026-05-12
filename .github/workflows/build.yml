@@ -23,6 +23,11 @@ on:
         required: false
         default: true
         type: boolean
+      ksu_version:
+        description: "KernelSU Version Tag (e.g. v1.0.0)"
+        required: false
+        default: "latest"
+        type: string
       release:
         description: "Create Release"
         required: false
@@ -39,7 +44,7 @@ env:
 
 jobs:
   build:
-    name: Build Kernel for ${{ env.DEVICE }}
+    name: Build Kernel for sweet
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout Repository
@@ -59,30 +64,26 @@ jobs:
 
           # Download AOSP Clang
           echo "Downloading AOSP Clang..."
-          mkdir -p toolchain
-          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-16.0.0_r16.tar.gz/clang/${{ env.CLANG_VERSION }}.tar.gz -O toolchain/clang.tar.gz
-          cd toolchain
-          tar -xzf clang.tar.gz
-          cd ..
+          mkdir -p toolchain/clang
+          wget "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-16.0.0_r16.tar.gz/clang/${{ env.CLANG_VERSION }}.tar.gz" -O toolchain/clang.tar.gz
+          tar -xzf toolchain/clang.tar.gz -C toolchain/clang
 
           # Download AOSP GCC
           echo "Downloading AOSP GCC..."
-          wget https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-gnu-${{ env.GCC_VERSION }}.tar.gz -O toolchain/gcc.tar.gz
-          cd toolchain
-          tar -xzf gcc.tar.gz
-          cd ..
+          mkdir -p toolchain/gcc
+          wget "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-gnu-${{ env.GCC_VERSION }}.tar.gz" -O toolchain/gcc.tar.gz
+          tar -xzf toolchain/gcc.tar.gz -C toolchain/gcc
 
       - name: Apply LN8000 Patches
         run: |
           cd ${{ env.KERNEL_DIR }}
           echo "Applying LN8000 patches..."
-          
-          # LN8000 charger driver patches
+
           PATCHES=(
             "https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150/commit/7b73f853977d2c016e30319dffb1f49957d30b40.patch"
             "https://github.com/crdroidandroid/android_kernel_xiaomi_sm6150/commit/63dddc108d57dc43e1cd0da0f1445875f760cf97.patch"
           )
-          
+
           for patch in "${PATCHES[@]}"; do
             echo "Downloading and applying: $patch"
             if curl -s "$patch" | patch -p1 --dry-run > /dev/null 2>&1; then
@@ -94,42 +95,41 @@ jobs:
         run: |
           cd ${{ env.KERNEL_DIR }}
           echo "Applying kpatch and LTO fixes for 4.14..."
-          
-          # Apply kpatch syscall hook
+
           KPATCH_URL="https://github.com/TheSillyOk/android_kernel_xiaomi_sm6150/commit/xyz.patch"
           if curl -s "$KPATCH_URL" | patch -p1 --dry-run > /dev/null 2>&1; then
             curl -s "$KPATCH_URL" | patch -p1 --fuzz=2 || true
           fi
-          
-          # Enable kprobes in config
+
           sed -i 's/# CONFIG_KPROBES is not set/CONFIG_KPROBES=y/' arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
 
       - name: Integrate KernelSU Next for 4.14
         run: |
           cd ${{ env.KERNEL_DIR }}
           echo "Integrating KernelSU Next (4.14 kernel compatible)..."
-          
-          # Use KernelSU Next which has better 4.14 support
-          echo "Installing KernelSU Next..."
+
           curl -LSs https://raw.githubusercontent.com/tiann/KernelSU/next/kernel/setup.sh | bash
-          
-          # Enable KernelSU in defconfig
+
           if ! grep -q "CONFIG_KPROBES=y" arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}; then
             echo "CONFIG_KPROBES=y" >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           fi
-          
-          # 4.14 specific kprobes configuration
-          printf '%s\n' '# 4.14 Kernel - KernelSU Next Compatibility' 'CONFIG_KPROBES_ON_FTRACE=y' 'CONFIG_HAVE_KPROBES=y' 'CONFIG_KRETPROBES=y' 'CONFIG_HAVE_KRETPROBES=y' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+
+          printf '%s\n' \
+            '# 4.14 Kernel - KernelSU Next Compatibility' \
+            'CONFIG_KPROBES_ON_FTRACE=y' \
+            'CONFIG_HAVE_KPROBES=y' \
+            'CONFIG_KRETPROBES=y' \
+            'CONFIG_HAVE_KRETPROBES=y' \
+            >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
 
       - name: Apply SUSFS Patches
         if: ${{ github.event.inputs.susfs_enabled == 'true' }}
         run: |
           cd ${{ env.KERNEL_DIR }}
           echo "Applying SUSFS patches for KernelSU Next..."
-          
-          # Use KernelSU Next SUSFS patches (4.14 compatible)
+
           SUSFS_URL="https://github.com/JackA1ltMan/susfs4ksu/raw/main/ksu_next.patch"
-          
+
           if curl -Ls "$SUSFS_URL" | patch -p1 --dry-run > /dev/null 2>&1; then
             echo "Applying SUSFS patches..."
             curl -Ls "$SUSFS_URL" | patch -s -p1 --fuzz=5 || echo "SUSFS patch failed or already applied"
@@ -140,21 +140,27 @@ jobs:
         run: |
           cd ${{ env.KERNEL_DIR }}
           echo "Configuring SELinux hiding and AVC spoofing..."
-          
-          # Enable SELinux hooks for SUSFS
+
           if [ "${{ github.event.inputs.susfs_enabled }}" = "true" ]; then
-            # SUSFS includes SELinux hiding capabilities
             echo "SUSFS with SELinux hiding enabled"
           fi
-          
-          # Enable AVC log spoofing
+
           if [ "${{ github.event.inputs.avc_spoof }}" = "true" ]; then
-            printf '%s\n' '# AVC Log Spoofing Support' 'CONFIG_AUDIT=y' 'CONFIG_AUDIT_ARCH=y' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+            printf '%s\n' \
+              '# AVC Log Spoofing Support' \
+              'CONFIG_AUDIT=y' \
+              'CONFIG_AUDIT_ARCH=y' \
+              >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           fi
-          
-          # Enable SELinux modifications
+
           if [ "${{ github.event.inputs.hide_selinux }}" = "true" ]; then
-            printf '%s\n' '# SELinux Modifications Support' 'CONFIG_SECURITY_SELINUX=y' 'CONFIG_SECURITY_SELINUX_BOOTPARAM=y' 'CONFIG_SECURITY_SELINUX_DEVELOP=y' 'CONFIG_SECURITY_SELINUX_DEBUG=y' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+            printf '%s\n' \
+              '# SELinux Modifications Support' \
+              'CONFIG_SECURITY_SELINUX=y' \
+              'CONFIG_SECURITY_SELINUX_BOOTPARAM=y' \
+              'CONFIG_SECURITY_SELINUX_DEVELOP=y' \
+              'CONFIG_SECURITY_SELINUX_DEBUG=y' \
+              >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           fi
 
       - name: Integrate Kowsu
@@ -162,29 +168,27 @@ jobs:
         run: |
           cd ${{ env.KERNEL_DIR }}
           echo "Integrating Kowsu with SUSFS..."
-          
-          # Kowsu setup (alternative root solution)
-          # Apply Kowsu patches if available
+
           KOWSU_REPO="https://raw.githubusercontent.com/E7KMbb/KoWSU/main"
-          
+
           if curl -Ls "${KOWSU_REPO}/kowsu.patch" | patch -p1 --dry-run > /dev/null 2>&1; then
             echo "Applying Kowsu patches..."
             curl -Ls "${KOWSU_REPO}/kowsu.patch" | patch -s -p1 --fuzz=5 || echo "Kowsu patch not available"
           fi
-          
-          # Add Kowsu configuration
-          printf '%s\n' '# Kowsu support (requires CONFIG_KPROBES)' 'CONFIG_KPROBES=y' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+
+          printf '%s\n' \
+            '# Kowsu support (requires CONFIG_KPROBES)' \
+            'CONFIG_KPROBES=y' \
+            >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
 
       - name: Prepare Defconfig
         run: |
           cd ${{ env.KERNEL_DIR }}
           echo "Preparing defconfig..."
-          
-          # Remove duplicates and clean config
+
           awk '!seen[$0]++' arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} > arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}.tmp
           mv arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}.tmp arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
-          
-          # Show final config
+
           echo "Final defconfig (first 50 lines):"
           head -50 arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
 
@@ -192,58 +196,57 @@ jobs:
         run: |
           cd ${{ env.KERNEL_DIR }}
           echo "Starting kernel build..."
-          
-          export PATH=${{ github.workspace }}/toolchain/clang/bin:${{ github.workspace }}/toolchain/aarch64-linux-gnu/bin:$PATH
+
+          export PATH=${{ github.workspace }}/toolchain/clang/bin:${{ github.workspace }}/toolchain/gcc/bin:$PATH
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
           export CXX=clang++
-          
-          # Generate config
+
           make O=out ARCH=${{ env.ARCH }} ${{ env.DEVICE_DEFCONFIG }}
-          
-          # Build kernel with optimization flags
+
           make -j$(nproc) O=out ARCH=${{ env.ARCH }} \
             LLVM=1 \
             LTO=thin \
             LOCALVERSION="-KSU-${{ env.DEVICE }}" \
             Image.gz dtb
-          
+
           echo "Kernel build completed!"
           ls -lh out/arch/arm64/boot/
+
+      - name: Set Build Date
+        id: date
+        run: echo "value=$(date +%Y%m%d)" >> $GITHUB_OUTPUT
+
+      - name: Set Release Timestamp
+        id: timestamp
+        run: echo "value=$(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_OUTPUT
 
       - name: Prepare Flashable ZIP
         run: |
           cd ${{ github.workspace }}
           echo "Preparing flashable ZIP with AnyKernel3..."
-          
-          # Clone AnyKernel3
+
           git clone https://github.com/osm0sis/AnyKernel3 -b master AK3
           cd AK3
-          
-          # Copy kernel
+
           cp ../${{ env.KERNEL_DIR }}/out/arch/arm64/boot/Image.gz zImage
           cp ../${{ env.KERNEL_DIR }}/out/arch/arm64/boot/dtb.img dtb
-          
-          # Modify for sweet device
+
           sed -i 's/device.name1=.*/device.name1=sweet/' anykernel.sh
           sed -i 's/device.name2=.*/device.name2=sweetin/' anykernel.sh
-          
-          # Add metadata
+
           cat > metadata.txt << EOF
-VERSION=KSU-${{ github.event.inputs.ksu_version }}-SUSFS-$(date +%Y%m%d)
-DEVICE=sweet
-BUILD_DATE=$(date -u +'%Y-%m-%d %H:%M UTC')
-KOWSU=${{ github.event.inputs.kowsu_enabled }}
-AVC_SPOOF=${{ github.event.inputs.avc_spoof }}
-HIDE_SELINUX=${{ github.event.inputs.hide_selinux }}
-EOF
-          
-          # Create flashable ZIP
-          zip -r9 kernel-sweet-KSU-${{ github.event.inputs.ksu_version }}-$(date +%Y%m%d).zip . -x ".git/*" "*.git" "kernel/*" "scripts/*" "patches/*"
-          
-          cd ..
-          mv AK3/kernel-*.zip ./
+          VERSION=KSU-${{ github.event.inputs.ksu_version }}-SUSFS-${{ steps.date.outputs.value }}
+          DEVICE=sweet
+          BUILD_DATE=${{ steps.timestamp.outputs.value }}
+          KOWSU=${{ github.event.inputs.kowsu_enabled }}
+          AVC_SPOOF=${{ github.event.inputs.avc_spoof }}
+          HIDE_SELINUX=${{ github.event.inputs.hide_selinux }}
+          EOF
+
+          zip -r9 ../kernel-sweet-KSU-${{ github.event.inputs.ksu_version }}-${{ steps.date.outputs.value }}.zip . \
+            -x ".git/*" "*.git" "kernel/*" "scripts/*" "patches/*"
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
@@ -260,24 +263,24 @@ EOF
         uses: softprops/action-gh-release@v1
         with:
           files: kernel-sweet-KSU-*.zip
-          tag_name: kernel-${{ env.DEVICE }}-$(date +%Y%m%d-%H%M%S)
+          tag_name: kernel-${{ env.DEVICE }}-${{ steps.date.outputs.value }}
           body: |
             # Kernel Build for ${{ env.DEVICE }}
-            
+
             **Configuration:**
             - KernelSU: Next (4.14 compatible)
             - SUSFS: ${{ github.event.inputs.susfs_enabled }}
             - Kowsu: ${{ github.event.inputs.kowsu_enabled }}
             - AVC Log Spoofing: ${{ github.event.inputs.avc_spoof }}
             - SELinux Hiding: ${{ github.event.inputs.hide_selinux }}
-            
+
             **Build Information:**
             - Device: ${{ env.DEVICE }} (Redmi Note 10 Pro)
             - Kernel Version: 4.14.x
             - Architecture: ${{ env.ARCH }}
-            - Build Date: $(date -u +'%Y-%m-%d %H:%M UTC')
+            - Build Date: ${{ steps.timestamp.outputs.value }}
             - Compiler: AOSP Clang ${{ env.CLANG_VERSION }}
-            
+
             **Features:**
             - Compiled with LTO (Link Time Optimization)
             - LLVM enabled
