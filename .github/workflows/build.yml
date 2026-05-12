@@ -59,9 +59,9 @@ env:
 # ═══════════════════════════════════════════════════════════════════════════════
 jobs:
 
-  # ── Job 1: Preparation (Clone, Patch Common, Prepare Matrix) ────────────────
+  # ── Job 1: Preparation (Clone, Patch Common, Clang, Prepare Matrix) ─────────
   setup:
-    name: Prepare Kernel Source & Matrix
+    name: Preparation
     runs-on: ubuntu-22.04
     outputs:
       matrix: ${{ steps.matrix.outputs.value }}
@@ -137,6 +137,23 @@ jobs:
             echo "CONFIG_KPROBES=y" >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           fi
 
+      - name: Cache AOSP Clang Toolchain
+        id: cache-clang
+        uses: actions/cache@v4
+        with:
+          path: toolchain/clang
+          key: aosp-clang-${{ env.CLANG_VERSION }}
+
+      - name: Download AOSP Clang (cache miss only)
+        if: steps.cache-clang.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p toolchain/clang
+          wget -q \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-${{ env.CLANG_VERSION }}.tar.gz" \
+            -O toolchain/clang.tar.gz
+          tar -xzf toolchain/clang.tar.gz -C toolchain/clang
+          rm toolchain/clang.tar.gz
+
       - name: Cache Patched Kernel Source for Matrix
         uses: actions/cache/save@v4
         with:
@@ -164,6 +181,13 @@ jobs:
           key: kernel-patched-${{ github.run_id }}
           fail-on-cache-miss: true
 
+      - name: Restore AOSP Clang Toolchain
+        uses: actions/cache/restore@v4
+        with:
+          path: toolchain/clang
+          key: aosp-clang-${{ env.CLANG_VERSION }}
+          fail-on-cache-miss: true
+
       - name: Install APT Dependencies
         run: |
           sudo apt-get update -qq
@@ -173,23 +197,6 @@ jobs:
             gcc-aarch64-linux-gnu git gnupg gzip libelf-dev \
             lib32z1-dev libtinfo5 openssl pahole python3 repo \
             rsync schedtool wget zip zlib1g-dev
-
-      - name: Cache AOSP Clang Toolchain
-        id: cache-clang
-        uses: actions/cache@v4
-        with:
-          path: toolchain/clang
-          key: aosp-clang-${{ env.CLANG_VERSION }}
-
-      - name: Download AOSP Clang (cache miss only)
-        if: steps.cache-clang.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p toolchain/clang
-          wget -q \
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-${{ env.CLANG_VERSION }}.tar.gz" \
-            -O toolchain/clang.tar.gz
-          tar -xzf toolchain/clang.tar.gz -C toolchain/clang
-          rm toolchain/clang.tar.gz
 
       - name: Verify Clang
         run: |
@@ -280,9 +287,10 @@ jobs:
 
           python3 /tmp/inject_ksu_hooks.py
 
-          # Fix uapi header visibility
+          # Fix uapi header visibility and version warnings
+          echo "ccflags-y += -DKSU_GIT_VERSION=\"\\\"504d8e7\\\"\"" >> drivers/kernelsu/Kbuild
           mkdir -p drivers/kernelsu/policy/uapi
-          [ -f drivers/kernelsu/uapi/app_profile.h ] && cp drivers/kernelsu/uapi/app_profile.h drivers/kernelsu/policy/uapi/
+          find drivers/kernelsu -name "app_profile.h" -exec cp {} drivers/kernelsu/policy/uapi/ \;
 
           printf '%s\n' \
             '' \
@@ -313,9 +321,10 @@ jobs:
 
           python3 /tmp/inject_ksu_hooks.py
 
-          # Fix uapi header visibility
+          # Fix uapi header visibility and version warnings
+          echo "ccflags-y += -DKSU_GIT_VERSION=\"\\\"504d8e7\\\"\"" >> drivers/kernelsu/Kbuild
           mkdir -p drivers/kernelsu/policy/uapi
-          [ -f drivers/kernelsu/uapi/app_profile.h ] && cp drivers/kernelsu/uapi/app_profile.h drivers/kernelsu/policy/uapi/
+          find drivers/kernelsu -name "app_profile.h" -exec cp {} drivers/kernelsu/policy/uapi/ \;
 
           printf '%s\n' \
             '' \
