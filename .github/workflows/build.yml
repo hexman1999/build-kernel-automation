@@ -291,9 +291,10 @@ jobs:
           python3 /tmp/inject_ksu_hooks.py
 
           # Fix uapi header visibility and version warnings
-          echo "ccflags-y += -DKSU_GIT_VERSION=\"\\\"504d8e7\\\"\"" >> drivers/kernelsu/Kbuild
+          echo "ccflags-y += -DKSU_GIT_VERSION=\"\\\"ac539bd\\\"\"" >> drivers/kernelsu/Kbuild
+          rm -rf drivers/kernelsu/policy/uapi
           ln -sf ../uapi drivers/kernelsu/policy/uapi
-          ls -R drivers/kernelsu/policy/uapi || true
+          find drivers/kernelsu -name "app_profile.h" || true
 
           printf '%s\n' \
             '' \
@@ -325,9 +326,10 @@ jobs:
           python3 /tmp/inject_ksu_hooks.py
 
           # Fix uapi header visibility and version warnings
-          echo "ccflags-y += -DKSU_GIT_VERSION=\"\\\"504d8e7\\\"\"" >> drivers/kernelsu/Kbuild
+          echo "ccflags-y += -DKSU_GIT_VERSION=\"\\\"ac539bd\\\"\"" >> drivers/kernelsu/Kbuild
+          rm -rf drivers/kernelsu/policy/uapi
           ln -sf ../uapi drivers/kernelsu/policy/uapi
-          ls -R drivers/kernelsu/policy/uapi || true
+          find drivers/kernelsu -name "app_profile.h" || true
 
           printf '%s\n' \
             '' \
