@@ -1,0 +1,102 @@
+# Build Artifacts and Temporary Files
+kernel/
+out/
+toolchain/
+build/
+dist/
+
+# Output files
+*.ko
+*.img
+*.gz
+*.zip
+*.tar
+*.tar.gz
+*.tar.xz
+*.log
+
+# Flashable Kernels (git should not track these)
+kernel-*.zip
+*-boot.img
+*-dtbo.img
+
+# IDE and Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.env
+
+# Git temporary files
+.git/info/exclude
+.gitignore.local
+
+# Patch temporary files
+/tmp/
+*.patch.rej
+*.patch.orig
+
+# Build system artifacts
+.config
+.config.old
+Module.symvers
+System.map
+vmlinux
+vmlinux.o
+
+# Build logs
+build_*.log
+compile_*.log
+patch_*.log
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Secrets and credentials
+*.key
+*.pem
+secrets.env
+.env.local
+credentials.json
+
+# GitHub Actions specific
+.github/workflows/*.backup
+.github/workflows/*.tmp
+
+# Local development
+local.conf
+*.local
+test_*
+
+# Archives to exclude
+*.7z
+*.iso
+*.rar
+!kernel-*.zip
+
+# Node modules (if any build scripts use npm)
+node_modules/
+package-lock.json
+
+# OS-specific files
+Thumbs.db
+*.DS_Store
+.directory
+
+# Keep the repo clean - ignore common build output
+/out/
+/kernel/
+/toolchain/
+/scripts/*.log
+/patches/*.rej
+
+# Backup files
+*.bak
+*.backup
+*.swp
+*.tmp
