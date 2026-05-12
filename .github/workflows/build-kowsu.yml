@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download Kernel Source
         run: |
@@ -211,7 +211,7 @@ jobs:
             LLVM=1 \
             LTO=thin \
             LOCALVERSION="-Kowsu-${{ env.DEVICE }}" \
-            Image.gz dtb
+            Image.gz dtbs
 
           echo "Kernel build completed!"
           ls -lh out/arch/arm64/boot/
@@ -233,7 +233,7 @@ jobs:
           cd AK3
 
           cp ../${{ env.KERNEL_DIR }}/out/arch/arm64/boot/Image.gz zImage
-          cp ../${{ env.KERNEL_DIR }}/out/arch/arm64/boot/dtb.img dtb
+          find ../${{ env.KERNEL_DIR }}/out/arch/arm64/boot/dts -name "*.dtb" -exec cat {} + > dtb
 
           sed -i 's/device.name1=.*/device.name1=sweet/' anykernel.sh
           sed -i 's/device.name2=.*/device.name2=sweetin/' anykernel.sh
@@ -258,7 +258,7 @@ jobs:
           path: |
             kernel-sweet-Kowsu-*.zip
             kernel/out/arch/arm64/boot/Image.gz
-            kernel/out/arch/arm64/boot/dtb.img
+            kernel/out/arch/arm64/boot/dts/**/*.dtb
           retention-days: 30
 
       - name: Create Release
