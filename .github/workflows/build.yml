@@ -47,6 +47,9 @@ on:
         default: true
         type: boolean
 
+permissions:
+  contents: write
+
 env:
   DEVICE: sweet
   DEVICE_DEFCONFIG: sweet_defconfig
@@ -419,7 +422,10 @@ jobs:
 
           sed -i 's/device.name1=.*/device.name1=sweet/' anykernel.sh
           sed -i 's/device.name2=.*/device.name2=sweetin/' anykernel.sh
-          sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|' anykernel.sh
+          
+          # More aggressive block path fix
+          sed -i 's|^block=.*|block=/dev/block/bootdevice/by-name/boot;|' anykernel.sh
+          
           sed -i 's/is_slot_device=.*/is_slot_device=0;/' anykernel.sh
           
           # Map variant to friendly name
@@ -435,7 +441,13 @@ jobs:
           # Map variant and SUSFS for filename
           V_FILE="${{ matrix.variant }}"
           [ "$V_FILE" = "kernelsu_next" ] && V_FILE="ksunext"
-          [ "${{ github.event.inputs.susfs_enabled }}" = "true" ] && S_FILE="-susfs" || S_FILE=""
+          
+          # Logic fix: Only add -susfs if enabled AND NOT vanilla
+          if [ "${{ github.event.inputs.susfs_enabled }}" = "true" ] && [ "${{ matrix.variant }}" != "vanilla" ]; then
+            S_FILE="-susfs"
+          else
+            S_FILE=""
+          fi
           
           ZIPNAME="${V_FILE}${S_FILE}-VantomKernel-sweet"
 
@@ -455,10 +467,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ZIP_NAME }}
-          path: |
-            ${{ env.ZIP_NAME }}.zip
-            ${{ env.KERNEL_DIR }}/out/arch/arm64/boot/Image.gz
-            ${{ env.KERNEL_DIR }}/out/arch/arm64/boot/dts/**/*.dtb
+          path: ${{ env.ZIP_NAME }}.zip
           retention-days: 30
 
       - name: Create Release
@@ -474,8 +483,8 @@ jobs:
             |---------|--------|
             | Root Manager | `${{ matrix.variant }}` |
             | Hook Method | Manual (no kprobes) |
-            | SUSFS | ${{ github.event.inputs.susfs_enabled == 'true' && '✅' || '❌' }} |
-            | AVC Log Spoofing | ${{ github.event.inputs.avc_spoof == 'true' && '✅' || '❌' }} |
+            | SUSFS | ${{ (github.event.inputs.susfs_enabled == 'true' && matrix.variant != 'vanilla') && '✅' || '❌' }} |
+            | AVC Log Spoofing | ${{ github.event.inputs.avc_spoof == 'true' && '✅' || '❌' |
             | SELinux Hiding | ${{ github.event.inputs.hide_selinux == 'true' && '✅' || '❌' }} |
 
             **Build:** 4.14.x · arm64 · AOSP Clang ${{ env.CLANG_VERSION }} · LTO thin · LLVM
