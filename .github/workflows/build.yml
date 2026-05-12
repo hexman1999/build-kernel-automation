@@ -224,8 +224,9 @@ jobs:
 
           # Fix uapi directory BEFORE configuration
           echo "Setting up uapi headers..."
+          rm -rf drivers/kernelsu/uapi 2>/dev/null || true
+          mkdir -p drivers/kernelsu/uapi
           if [ -d "../ksu_src/kernel/uapi" ]; then
-            mkdir -p drivers/kernelsu/uapi
             cp -r ../ksu_src/kernel/uapi/* drivers/kernelsu/uapi/ 2>/dev/null || true
             echo "  ✓ uapi copied from source"
           fi
@@ -237,14 +238,12 @@ jobs:
             elif find ../ksu_src -name "app_profile.h" 2>/dev/null | grep -q .; then
               cp $(find ../ksu_src -name "app_profile.h" 2>/dev/null | head -1) drivers/kernelsu/uapi/
             else
-              mkdir -p drivers/kernelsu/uapi
               touch drivers/kernelsu/uapi/app_profile.h
             fi
           fi
           
           # Create symlink for policy includes
           rm -rf drivers/kernelsu/policy/uapi 2>/dev/null || true
-          mkdir -p drivers/kernelsu/uapi
           ln -sf ../uapi drivers/kernelsu/policy/uapi
           echo "  ✓ uapi symlink created"
 
@@ -315,8 +314,9 @@ jobs:
 
           # Fix uapi directory BEFORE configuration
           echo "Setting up uapi headers..."
+          rm -rf drivers/kernelsu/uapi 2>/dev/null || true
+          mkdir -p drivers/kernelsu/uapi
           if [ -d "../ksu_src/kernel/uapi" ]; then
-            mkdir -p drivers/kernelsu/uapi
             cp -r ../ksu_src/kernel/uapi/* drivers/kernelsu/uapi/ 2>/dev/null || true
             echo "  ✓ uapi copied from source"
           fi
@@ -328,14 +328,12 @@ jobs:
             elif find ../ksu_src -name "app_profile.h" 2>/dev/null | grep -q .; then
               cp $(find ../ksu_src -name "app_profile.h" 2>/dev/null | head -1) drivers/kernelsu/uapi/
             else
-              mkdir -p drivers/kernelsu/uapi
               touch drivers/kernelsu/uapi/app_profile.h
             fi
           fi
           
           # Create symlink for policy includes
           rm -rf drivers/kernelsu/policy/uapi 2>/dev/null || true
-          mkdir -p drivers/kernelsu/uapi
           ln -sf ../uapi drivers/kernelsu/policy/uapi
           echo "  ✓ uapi symlink created"
 
