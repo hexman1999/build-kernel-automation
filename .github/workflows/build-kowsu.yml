@@ -42,7 +42,7 @@ env:
 
 jobs:
   build:
-    name: Build Kernel with Kowsu for sweet
+    name: Build Kernel with Kowsu for ${{ env.DEVICE }}
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout Repository
@@ -107,13 +107,12 @@ jobs:
 
           if [ -f "kowsu_src/kernel/setup.sh" ]; then
             echo "Running Kowsu setup script..."
-            cd kowsu_src/kernel
-            bash setup.sh
-            cd ../../
+            # setup.sh must be run from the kernel source root, not from inside the repo
+            bash kowsu_src/kernel/setup.sh
           else
             echo "Setup script not found, checking for integration files..."
-            if [ -f "kowsu_src/kernel/kowsu.c" ]; then
-              cp -r kowsu_src/kernel/* KernelSU/
+            if [ -d "kowsu_src/kernel" ]; then
+              cp -r kowsu_src/kernel/* ./
               echo "Kowsu files integrated"
             fi
           fi
