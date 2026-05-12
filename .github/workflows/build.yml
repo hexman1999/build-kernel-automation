@@ -280,6 +280,10 @@ jobs:
 
           python3 /tmp/inject_ksu_hooks.py
 
+          # Fix uapi header visibility
+          mkdir -p drivers/kernelsu/policy/uapi
+          [ -f drivers/kernelsu/uapi/app_profile.h ] && cp drivers/kernelsu/uapi/app_profile.h drivers/kernelsu/policy/uapi/
+
           printf '%s\n' \
             '' \
             '# KernelSU Next — manual hook' \
@@ -308,6 +312,10 @@ jobs:
             sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
           python3 /tmp/inject_ksu_hooks.py
+
+          # Fix uapi header visibility
+          mkdir -p drivers/kernelsu/policy/uapi
+          [ -f drivers/kernelsu/uapi/app_profile.h ] && cp drivers/kernelsu/uapi/app_profile.h drivers/kernelsu/policy/uapi/
 
           printf '%s\n' \
             '' \
