@@ -412,7 +412,16 @@ jobs:
           sed -i 's/device.name2=.*/device.name2=sweetin/' anykernel.sh
           sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|' anykernel.sh
           sed -i 's/is_slot_device=.*/is_slot_device=0;/' anykernel.sh
-          sed -i 's/kernel.string=.*/kernel.string=Kernel Build for sweet/' anykernel.sh
+          
+          # Map variant to friendly name
+          V_NAME="${{ matrix.variant }}"
+          case "$V_NAME" in
+            "kernelsu_next") F_NAME="KernelSU Next" ;;
+            "kowsu") F_NAME="KowSU" ;;
+            "vanilla") F_NAME="No KSU" ;;
+            *) F_NAME="$V_NAME" ;;
+          esac
+          sed -i "s/kernel.string=.*/kernel.string=Vantom Kernel - $F_NAME/" anykernel.sh
 
           ZIPNAME="kernel-sweet-${{ matrix.variant }}-${{ steps.date.outputs.value }}"
 
