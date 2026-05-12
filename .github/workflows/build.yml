@@ -39,7 +39,7 @@ env:
   DEVICE_DEFCONFIG: sweet_defconfig
   ARCH: arm64
   KERNEL_DIR: kernel
-  CLANG_VERSION: r383902
+  CLANG_VERSION: r530567
   GCC_VERSION: "11"
 
 jobs:
@@ -65,7 +65,7 @@ jobs:
           # Download AOSP Clang
           echo "Downloading AOSP Clang..."
           mkdir -p toolchain/clang
-          wget "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-16.0.0_r16.tar.gz/clang/${{ env.CLANG_VERSION }}.tar.gz" -O toolchain/clang.tar.gz
+          wget "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master.tar.gz/clang-${{ env.CLANG_VERSION }}.tar.gz" -O toolchain/clang.tar.gz
           tar -xzf toolchain/clang.tar.gz -C toolchain/clang
 
           # Download AOSP GCC
