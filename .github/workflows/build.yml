@@ -425,6 +425,10 @@ jobs:
         id: timestamp
         run: echo "value=$(date -u +'%Y-%m-%d %H:%M UTC')" >> $GITHUB_OUTPUT
 
+      - name: Set Build Time
+        id: time
+        run: echo "value=$(date +%H%M)" >> $GITHUB_OUTPUT
+
       - name: Prepare Flashable ZIP
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AK3
@@ -442,20 +446,9 @@ jobs:
           sed -i 's/device.name2=.*/device.name2=sweetin/' anykernel.sh
           sed -i 's/is_slot_device=.*/is_slot_device=0/' anykernel.sh
           
-          # Create device_specific.sh with block device configuration
-          cat > device_specific.sh << 'DEVEOF'
-          #!/bin/bash
-          BLOCK=/dev/block/bootdevice/by-name/boot
-          DEVEOF
-          
-          # Replace the automatic block detection with our known path
-          # Find the line with block variable assignment and replace it
-          if grep -q "block=" anykernel.sh; then
-            sed -i 's|^block=.*|block=/dev/block/bootdevice/by-name/boot|' anykernel.sh
-          else
-            # If block variable doesn't exist, add it early in the script
-            sed -i '/#!/a block=/dev/block/bootdevice/by-name/boot' anykernel.sh
-          fi
+          # Let AnyKernel3 auto-detect the block device (safer for single boot partition)
+          # Remove any hardcoded block device to allow automatic detection
+          sed -i '/^block=/d' anykernel.sh || true
           
           # Map variant to friendly name
           V_NAME="${{ matrix.variant }}"
@@ -480,7 +473,7 @@ jobs:
             S_FILE=""
           fi
           
-          ZIPNAME="${V_FILE}${S_FILE}-VantomKernel-sweet"
+          ZIPNAME="${V_FILE}${S_FILE}-VantomKernel-sweet-${{ steps.date.outputs.value }}-${{ steps.time.outputs.value }}"
 
           cat > metadata.txt << EOF
           VARIANT=${{ matrix.variant }}
@@ -541,8 +534,11 @@ jobs:
           ════════════════════════════════════════════════════════════════
           EOF
 
-          zip -r9 ../${ZIPNAME}.zip . -x ".git/*" "*.git" "kernel/*" "scripts/*" "patches/*"
+          # Create clean flashable zip (exclude unnecessary files)
+          cd ..
+          zip -r9 ${ZIPNAME}.zip AK3/* -x "AK3/.git/*" "AK3/.gitignore" "AK3/*.md" "AK3/LICENSE"
           echo "ZIP_NAME=${ZIPNAME}" >> $GITHUB_ENV
+          ls -lh ${ZIPNAME}.zip
 
       - name: Generate Release Notes
         run: |
