@@ -40,7 +40,6 @@ env:
   ARCH: arm64
   KERNEL_DIR: kernel
   CLANG_VERSION: r530567
-  GCC_VERSION: "11"
 
 jobs:
   build:
@@ -65,14 +64,12 @@ jobs:
           # Download AOSP Clang
           echo "Downloading AOSP Clang..."
           mkdir -p toolchain/clang
-          wget "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master.tar.gz/clang-${{ env.CLANG_VERSION }}.tar.gz" -O toolchain/clang.tar.gz
+          wget "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-${{ env.CLANG_VERSION }}.tar.gz" -O toolchain/clang.tar.gz
           tar -xzf toolchain/clang.tar.gz -C toolchain/clang
 
-          # Download AOSP GCC
+          # Download AOSP GCC (git clone is more reliable than tar for GCC)
           echo "Downloading AOSP GCC..."
-          mkdir -p toolchain/gcc
-          wget "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-gnu-${{ env.GCC_VERSION }}.tar.gz" -O toolchain/gcc.tar.gz
-          tar -xzf toolchain/gcc.tar.gz -C toolchain/gcc
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 toolchain/gcc
 
       - name: Apply LN8000 Patches
         run: |
@@ -198,7 +195,7 @@ jobs:
           echo "Starting kernel build..."
 
           export PATH=${{ github.workspace }}/toolchain/clang/bin:${{ github.workspace }}/toolchain/gcc/bin:$PATH
-          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-android-
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
           export CXX=clang++
