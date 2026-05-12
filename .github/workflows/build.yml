@@ -432,7 +432,12 @@ jobs:
           esac
           sed -i "s/kernel.string=.*/kernel.string=Vantom Kernel - $F_NAME/" anykernel.sh
 
-          ZIPNAME="kernel-sweet-${{ matrix.variant }}-${{ steps.date.outputs.value }}"
+          # Map variant and SUSFS for filename
+          V_FILE="${{ matrix.variant }}"
+          [ "$V_FILE" = "kernelsu_next" ] && V_FILE="ksunext"
+          [ "${{ github.event.inputs.susfs_enabled }}" = "true" ] && S_FILE="-susfs" || S_FILE=""
+          
+          ZIPNAME="${V_FILE}${S_FILE}-VantomKernel-sweet"
 
           cat > metadata.txt << EOF
           VARIANT=${{ matrix.variant }}
@@ -449,9 +454,9 @@ jobs:
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-${{ matrix.variant }}-${{ steps.date.outputs.value }}
+          name: ${{ env.ZIP_NAME }}
           path: |
-            kernel-sweet-${{ matrix.variant }}-*.zip
+            ${{ env.ZIP_NAME }}.zip
             ${{ env.KERNEL_DIR }}/out/arch/arm64/boot/Image.gz
             ${{ env.KERNEL_DIR }}/out/arch/arm64/boot/dts/**/*.dtb
           retention-days: 30
@@ -460,8 +465,8 @@ jobs:
         if: ${{ github.event.inputs.release == 'true' }}
         uses: softprops/action-gh-release@v1
         with:
-          files: kernel-sweet-${{ matrix.variant }}-*.zip
-          tag_name: kernel-${{ env.DEVICE }}-${{ matrix.variant }}-${{ steps.date.outputs.value }}
+          files: ${{ env.ZIP_NAME }}.zip
+          tag_name: ${{ env.ZIP_NAME }}-${{ steps.date.outputs.value }}
           body: |
             # Kernel [${{ matrix.variant }}] for ${{ env.DEVICE }} (Redmi Note 10 Pro)
 
