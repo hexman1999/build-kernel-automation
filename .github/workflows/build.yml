@@ -533,8 +533,6 @@ jobs:
             sed -i '/#!/a block=/dev/block/bootdevice/by-name/boot' anykernel.sh
           fi
           
-          sed -i 's/kernel.string=.*/kernel.string=Vantom Kernel - ${{ matrix.variant }}/' anykernel.sh
-
           # Map variant to friendly name
           V_NAME="${{ matrix.variant }}"
           case "$V_NAME" in
@@ -543,7 +541,9 @@ jobs:
             "vanilla") F_NAME="No KSU" ;;
             *) F_NAME="$V_NAME" ;;
           esac
-          sed -i "s/kernel.string=.*/kernel.string=Vantom Kernel - $F_NAME/" anykernel.sh
+          
+          # Set kernel string with build information
+          sed -i "s/kernel.string=.*/kernel.string=Vantom Kernel - $F_NAME - Build ${{ steps.date.outputs.value }}/" anykernel.sh
 
           # Map variant and SUSFS for filename
           V_FILE="${{ matrix.variant }}"
@@ -565,6 +565,56 @@ jobs:
           HIDE_SELINUX=${{ github.event.inputs.hide_selinux }}
           DEVICE=sweet
           BUILD_DATE=${{ steps.timestamp.outputs.value }}
+          EOF
+
+          cat > BUILD_INFO.txt << EOF
+          ╔════════════════════════════════════════════════════════════╗
+          ║           Vantom Kernel Build Information                  ║
+          ╚════════════════════════════════════════════════════════════╝
+
+          Build Details:
+          ──────────────────────────────────────────────────────────────
+          Date & Time:    ${{ steps.timestamp.outputs.value }}
+          Date (YYYYMMDD): ${{ steps.date.outputs.value }}
+          Variant:        ${{ matrix.variant }}
+          Device:         sweet (Redmi Note 10 Pro)
+
+          Features:
+          ──────────────────────────────────────────────────────────────
+          Root Manager:   ${{ matrix.variant }}
+          SUSFS Enabled:  ${{ github.event.inputs.susfs_enabled }}
+          AVC Spoofing:   ${{ github.event.inputs.avc_spoof }}
+          SELinux Hiding: ${{ github.event.inputs.hide_selinux }}
+
+          Build Configuration:
+          ──────────────────────────────────────────────────────────────
+          Kernel:         4.14.x (arm64)
+          Compiler:       AOSP Clang ${{ env.CLANG_VERSION }}
+          Optimization:   LTO thin · LLVM · -O3
+          Architecture:   ARM64
+          Defconfig:      ${{ env.DEVICE_DEFCONFIG }}
+
+          File Information:
+          ──────────────────────────────────────────────────────────────
+          Kernel Image:   Image.gz
+          Device Tree:    dtb (concatenated)
+          Filename:       $ZIPNAME
+
+          Release Notes:
+          ──────────────────────────────────────────────────────────────
+          GitHub Release: ${{ env.ZIP_NAME }}-${{ steps.date.outputs.value }}
+          Build ID:       ${{ github.run_id }}
+          Run Number:     ${{ github.run_number }}
+          Repository:     ${{ github.repository }}
+
+          Installation:
+          ──────────────────────────────────────────────────────────────
+          1. Download the ZIP file
+          2. Boot into recovery (TWRP)
+          3. Install → Select $ZIPNAME.zip
+          4. Reboot and enjoy!
+
+          ════════════════════════════════════════════════════════════════
           EOF
 
           zip -r9 ../${ZIPNAME}.zip . -x ".git/*" "*.git" "kernel/*" "scripts/*" "patches/*"
