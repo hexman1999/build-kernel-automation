@@ -246,24 +246,29 @@ jobs:
             sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           echo "  ✓ Makefile and Kconfig updated"
 
-          # ── Set up uapi headers ─────────────────────────────────────────────
-          rm -rf drivers/kernelsu/uapi 2>/dev/null || true
-          mkdir -p drivers/kernelsu/uapi
+          # ── Collect all uapi headers from source ────────────────────────────
+          # Build a definitive uapi directory from all possible source locations
+          mkdir -p /tmp/ksu_uapi_collected
 
+          # 1. Copy from kernel/uapi if it exists
           if [ -d "../ksu_src/kernel/uapi" ]; then
-            cp -r ../ksu_src/kernel/uapi/* drivers/kernelsu/uapi/ 2>/dev/null || true
-            echo "  ✓ uapi copied from source"
+            cp -r ../ksu_src/kernel/uapi/. /tmp/ksu_uapi_collected/
+            echo "  ✓ uapi headers collected from kernel/uapi"
           fi
 
-          # Ensure app_profile.h is present
-          if [ ! -f "drivers/kernelsu/uapi/app_profile.h" ]; then
+          # 2. Hunt for any .h files under any uapi dir in the source tree
+          find ../ksu_src -path "*/uapi/*.h" 2>/dev/null | while read f; do
+            cp "$f" /tmp/ksu_uapi_collected/ 2>/dev/null || true
+          done
+
+          # 3. Ensure app_profile.h exists — stub if still missing
+          if [ ! -f "/tmp/ksu_uapi_collected/app_profile.h" ]; then
             FOUND=$(find ../ksu_src -name "app_profile.h" 2>/dev/null | head -1)
             if [ -n "$FOUND" ]; then
-              cp "$FOUND" drivers/kernelsu/uapi/
-              echo "  ✓ app_profile.h copied from: $FOUND"
+              cp "$FOUND" /tmp/ksu_uapi_collected/
+              echo "  ✓ app_profile.h found at: $FOUND"
             else
-              # Minimal stub so the build does not fail on a missing include
-              cat > drivers/kernelsu/uapi/app_profile.h << 'HEADER_EOF'
+              cat > /tmp/ksu_uapi_collected/app_profile.h << 'HEADER_EOF'
           #ifndef __KSU_UAPI_APP_PROFILE_H
           #define __KSU_UAPI_APP_PROFILE_H
           #include <linux/types.h>
@@ -277,23 +282,67 @@ jobs:
           HEADER_EOF
               echo "  ⚠ app_profile.h not found upstream — stub created"
             fi
-          else
-            echo "  ✓ app_profile.h already present"
           fi
 
-          # Create policy/uapi symlink only if the policy dir exists
+          # 4. Ensure feature.h exists — stub if missing
+          if [ ! -f "/tmp/ksu_uapi_collected/feature.h" ]; then
+            FOUND=$(find ../ksu_src -name "feature.h" 2>/dev/null | head -1)
+            if [ -n "$FOUND" ]; then
+              cp "$FOUND" /tmp/ksu_uapi_collected/
+              echo "  ✓ feature.h found at: $FOUND"
+            else
+              cat > /tmp/ksu_uapi_collected/feature.h << 'HEADER_EOF'
+          #ifndef __KSU_UAPI_FEATURE_H
+          #define __KSU_UAPI_FEATURE_H
+          #include <linux/types.h>
+          #define KSU_FEATURE_DEFAULT 0
+          #endif /* __KSU_UAPI_FEATURE_H */
+          HEADER_EOF
+              echo "  ⚠ feature.h not found upstream — stub created"
+            fi
+          fi
+
+          echo "  uapi headers collected:"
+          ls /tmp/ksu_uapi_collected/
+
+          # ── Deploy uapi headers to every location that needs them ────────────
+          # Use real copies everywhere — no symlinks — avoids relative-path
+          # resolution issues when the compiler walks include paths
+
+          # drivers/kernelsu/uapi  (top-level includes)
+          rm -rf drivers/kernelsu/uapi
+          cp -r /tmp/ksu_uapi_collected drivers/kernelsu/uapi
+          echo "  ✓ drivers/kernelsu/uapi populated"
+
+          # drivers/kernelsu/policy/uapi  (policy/feature.h does: #include "uapi/feature.h")
           if [ -d "drivers/kernelsu/policy" ]; then
             rm -rf drivers/kernelsu/policy/uapi
-            ln -sf ../uapi drivers/kernelsu/policy/uapi
-            echo "  ✓ policy/uapi symlink created"
+            cp -r /tmp/ksu_uapi_collected drivers/kernelsu/policy/uapi
+            echo "  ✓ drivers/kernelsu/policy/uapi populated"
           else
-            echo "  ℹ No policy dir — skipping uapi symlink"
+            echo "  ℹ No policy dir — skipping policy/uapi"
           fi
 
-          # ── Pin GIT version (printf avoids shell quote-escaping issues) ──────
-          printf 'ccflags-y += -DKSU_GIT_VERSION=\\\"ac539bd\\\"\n' \
-            >> drivers/kernelsu/Kbuild
-          echo "  ✓ KSU_GIT_VERSION pinned"
+          # drivers/kernelsu/core/uapi  (guard against core/ doing the same include)
+          if [ -d "drivers/kernelsu/core" ]; then
+            rm -rf drivers/kernelsu/core/uapi
+            cp -r /tmp/ksu_uapi_collected drivers/kernelsu/core/uapi
+            echo "  ✓ drivers/kernelsu/core/uapi populated"
+          fi
+
+          rm -rf /tmp/ksu_uapi_collected
+
+          # ── Pin GIT version ──────────────────────────────────────────────────
+          # KernelSU-Next's Kbuild detects version via `git describe` and warns
+          # when it can't (shallow clone, no tags). Tag the clone so detection
+          # succeeds cleanly instead of falling back to version 1 / v0.0.1.
+          (
+            cd ../ksu_src
+            git config user.email "ci@build" 2>/dev/null || true
+            git config user.name  "CI"        2>/dev/null || true
+            git tag v1.0.0 2>/dev/null || true
+          )
+          echo "  ✓ KSU git tag set to v1.0.0 for version detection"
 
           # ── Defconfig: enable inline hook, disable kprobes hook ──────────────
           printf '\n%s\nCONFIG_KSU=y\nCONFIG_KSU_INLINE_HOOK=y\n' \
@@ -318,15 +367,19 @@ jobs:
             || { echo "  ✗ drivers/kernelsu/uapi missing"; PASS=false; }
 
           [ -f "drivers/kernelsu/uapi/app_profile.h" ] \
-            && echo "  ✓ app_profile.h present" \
-            || { echo "  ✗ app_profile.h missing"; PASS=false; }
+            && echo "  ✓ app_profile.h present in kernelsu/uapi" \
+            || { echo "  ✗ app_profile.h missing from kernelsu/uapi"; PASS=false; }
+
+          [ -f "drivers/kernelsu/uapi/feature.h" ] \
+            && echo "  ✓ feature.h present in kernelsu/uapi" \
+            || { echo "  ✗ feature.h missing from kernelsu/uapi"; PASS=false; }
 
           if [ -d "drivers/kernelsu/policy" ]; then
-            [ -L "drivers/kernelsu/policy/uapi" ] \
-              && echo "  ✓ policy/uapi symlink present" \
-              || { echo "  ✗ policy/uapi not a symlink"; PASS=false; }
+            [ -f "drivers/kernelsu/policy/uapi/feature.h" ] \
+              && echo "  ✓ policy/uapi/feature.h present" \
+              || { echo "  ✗ policy/uapi/feature.h missing — this will cause build failure"; PASS=false; }
           else
-            echo "  ℹ No policy dir — symlink check skipped"
+            echo "  ℹ No policy dir — policy/uapi check skipped"
           fi
 
           grep -q "CONFIG_KSU=y" "arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}" \
