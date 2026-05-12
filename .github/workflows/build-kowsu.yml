@@ -133,29 +133,14 @@ jobs:
           # Configure Kowsu variant
           if [ "${{ github.event.inputs.kowsu_variant }}" = "systemless" ]; then
             echo "Configuring Kowsu systemless mode..."
-            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
-# Kowsu Systemless Configuration
-CONFIG_KOWSU_MODE=systemless
-EOF
+            printf '%s\n' '# Kowsu Systemless Configuration' 'CONFIG_KOWSU_MODE=systemless' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           else
             echo "Configuring Kowsu manager mode..."
-            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
-# Kowsu Manager Configuration
-CONFIG_KOWSU_MODE=manager
-EOF
+            printf '%s\n' '# Kowsu Manager Configuration' 'CONFIG_KOWSU_MODE=manager' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           fi
           
           # Essential Kowsu/Kprobes configuration for 4.14
-          cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
-
-# Kowsu Support - Kprobes Required (4.14 compatible)
-CONFIG_KPROBES=y
-CONFIG_KPROBES_ON_FTRACE=y
-CONFIG_HAVE_KPROBES=y
-CONFIG_KRETPROBES=y
-CONFIG_HAVE_KRETPROBES=y
-CONFIG_HAVE_REGS_AND_STACK_ACCESS_API=y
-EOF
+          printf '%s\n' '' '# Kowsu Support - Kprobes Required (4.14 compatible)' 'CONFIG_KPROBES=y' 'CONFIG_KPROBES_ON_FTRACE=y' 'CONFIG_HAVE_KPROBES=y' 'CONFIG_KRETPROBES=y' 'CONFIG_HAVE_KRETPROBES=y' 'CONFIG_HAVE_REGS_AND_STACK_ACCESS_API=y' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
 
       - name: Apply SUSFS Patches with Kowsu
         if: ${{ github.event.inputs.susfs_enabled == 'true' }}
@@ -179,28 +164,12 @@ EOF
           
           # Enable AVC log spoofing
           if [ "${{ github.event.inputs.avc_spoof }}" = "true" ]; then
-            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
-
-# AVC Log Spoofing Support for Kowsu
-CONFIG_AUDIT=y
-CONFIG_AUDIT_ARCH=y
-CONFIG_AUDITSYSCALL=y
-CONFIG_AUDIT_GENERIC=y
-EOF
+            printf '%s\n' '' '# AVC Log Spoofing Support for Kowsu' 'CONFIG_AUDIT=y' 'CONFIG_AUDIT_ARCH=y' 'CONFIG_AUDITSYSCALL=y' 'CONFIG_AUDIT_GENERIC=y' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           fi
           
           # Enable SELinux modifications support
           if [ "${{ github.event.inputs.hide_selinux }}" = "true" ]; then
-            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
-
-# SELinux Modifications Support with Kowsu
-CONFIG_SECURITY_SELINUX=y
-CONFIG_SECURITY_SELINUX_BOOTPARAM=y
-CONFIG_SECURITY_SELINUX_DEVELOP=y
-CONFIG_SECURITY_SELINUX_DEBUG=y
-CONFIG_SECURITY_SELINUX_AVC=y
-CONFIG_SECURITY_SELINUX_AVC_STATS=y
-EOF
+            printf '%s\n' '' '# SELinux Modifications Support with Kowsu' 'CONFIG_SECURITY_SELINUX=y' 'CONFIG_SECURITY_SELINUX_BOOTPARAM=y' 'CONFIG_SECURITY_SELINUX_DEVELOP=y' 'CONFIG_SECURITY_SELINUX_DEBUG=y' 'CONFIG_SECURITY_SELINUX_AVC=y' 'CONFIG_SECURITY_SELINUX_AVC_STATS=y' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           fi
 
       - name: Prepare Defconfig

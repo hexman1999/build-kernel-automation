@@ -119,13 +119,7 @@ jobs:
           fi
           
           # 4.14 specific kprobes configuration
-          cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
-# 4.14 Kernel - KernelSU Next Compatibility
-CONFIG_KPROBES_ON_FTRACE=y
-CONFIG_HAVE_KPROBES=y
-CONFIG_KRETPROBES=y
-CONFIG_HAVE_KRETPROBES=y
-EOF
+          printf '%s\n' '# 4.14 Kernel - KernelSU Next Compatibility' 'CONFIG_KPROBES_ON_FTRACE=y' 'CONFIG_HAVE_KPROBES=y' 'CONFIG_KRETPROBES=y' 'CONFIG_HAVE_KRETPROBES=y' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
 
       - name: Apply SUSFS Patches
         if: ${{ github.event.inputs.susfs_enabled == 'true' }}
@@ -155,22 +149,12 @@ EOF
           
           # Enable AVC log spoofing
           if [ "${{ github.event.inputs.avc_spoof }}" = "true" ]; then
-            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
-# AVC Log Spoofing Support
-CONFIG_AUDIT=y
-CONFIG_AUDIT_ARCH=y
-EOF
+            printf '%s\n' '# AVC Log Spoofing Support' 'CONFIG_AUDIT=y' 'CONFIG_AUDIT_ARCH=y' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           fi
           
           # Enable SELinux modifications
           if [ "${{ github.event.inputs.hide_selinux }}" = "true" ]; then
-            cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
-# SELinux Modifications Support
-CONFIG_SECURITY_SELINUX=y
-CONFIG_SECURITY_SELINUX_BOOTPARAM=y
-CONFIG_SECURITY_SELINUX_DEVELOP=y
-CONFIG_SECURITY_SELINUX_DEBUG=y
-EOF
+            printf '%s\n' '# SELinux Modifications Support' 'CONFIG_SECURITY_SELINUX=y' 'CONFIG_SECURITY_SELINUX_BOOTPARAM=y' 'CONFIG_SECURITY_SELINUX_DEVELOP=y' 'CONFIG_SECURITY_SELINUX_DEBUG=y' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
           fi
 
       - name: Integrate Kowsu
@@ -189,10 +173,7 @@ EOF
           fi
           
           # Add Kowsu configuration
-          cat >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} <<- 'EOF'
-# Kowsu support (requires CONFIG_KPROBES)
-CONFIG_KPROBES=y
-EOF
+          printf '%s\n' '# Kowsu support (requires CONFIG_KPROBES)' 'CONFIG_KPROBES=y' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
 
       - name: Prepare Defconfig
         run: |
