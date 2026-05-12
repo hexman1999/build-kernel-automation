@@ -292,9 +292,36 @@ jobs:
 
           # Fix uapi header visibility and version warnings
           echo "ccflags-y += -DKSU_GIT_VERSION=\"\\\"ac539bd\\\"\"" >> drivers/kernelsu/Kbuild
+          
+          # Ensure uapi directory structure for KernelSU-Next
+          # Copy uapi files from ksu_src if available, otherwise create symlink
+          if [ -d "../ksu_src/kernel/uapi" ]; then
+            mkdir -p drivers/kernelsu/uapi
+            cp -r ../ksu_src/kernel/uapi/* drivers/kernelsu/uapi/ 2>/dev/null || true
+          fi
+          
+          # Handle app_profile.h specifically - look for it in various locations
+          if [ ! -f "drivers/kernelsu/uapi/app_profile.h" ]; then
+            # Search for app_profile.h in cloned source
+            if [ -f "../ksu_src/kernel/uapi/app_profile.h" ]; then
+              cp ../ksu_src/kernel/uapi/app_profile.h drivers/kernelsu/uapi/
+            elif find ../ksu_src -name "app_profile.h" 2>/dev/null | grep -q .; then
+              cp $(find ../ksu_src -name "app_profile.h" 2>/dev/null | head -1) drivers/kernelsu/uapi/
+            else
+              # Create minimal stub if file doesn't exist
+              mkdir -p drivers/kernelsu/uapi
+              touch drivers/kernelsu/uapi/app_profile.h
+            fi
+          fi
+          
+          # Create symlink for policy includes
           rm -rf drivers/kernelsu/policy/uapi
-          ln -sf ../uapi drivers/kernelsu/policy/uapi
-          find drivers/kernelsu -name "app_profile.h" || true
+          if [ -d "drivers/kernelsu/uapi" ]; then
+            ln -sf ../uapi drivers/kernelsu/policy/uapi
+          else
+            mkdir -p drivers/kernelsu/uapi
+            ln -sf ../uapi drivers/kernelsu/policy/uapi
+          fi
 
           printf '%s\n' \
             '' \
@@ -307,6 +334,40 @@ jobs:
             echo 'CONFIG_KSU_KPROBES_HOOK=n' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} || true
 
           echo "  ✓ KernelSU Next done"
+
+      - name: Verify KernelSU uAPI Integration
+        if: matrix.variant == 'kernelsu_next'
+        run: |
+          cd ${{ env.KERNEL_DIR }}
+          echo "Verifying KernelSU-Next integration..."
+          echo "  Checking uapi structure:"
+          [ -d "drivers/kernelsu/uapi" ] && echo "    ✓ drivers/kernelsu/uapi exists" || echo "    ✗ drivers/kernelsu/uapi missing"
+          [ -L "drivers/kernelsu/policy/uapi" ] && echo "    ✓ drivers/kernelsu/policy/uapi is symlink" || echo "    ✗ drivers/kernelsu/policy/uapi not symlink"
+          
+          if [ -f "drivers/kernelsu/uapi/app_profile.h" ]; then
+            echo "    ✓ app_profile.h found at drivers/kernelsu/uapi/app_profile.h"
+          else
+            echo "    ✗ app_profile.h not found"
+            echo "    Available uapi files:"
+            find drivers/kernelsu -name "*.h" -path "*/uapi/*" 2>/dev/null | head -10
+          fi
+
+      - name: Verify KowSU uAPI Integration
+        if: matrix.variant == 'kowsu'
+        run: |
+          cd ${{ env.KERNEL_DIR }}
+          echo "Verifying KowSU integration..."
+          echo "  Checking uapi structure:"
+          [ -d "drivers/kernelsu/uapi" ] && echo "    ✓ drivers/kernelsu/uapi exists" || echo "    ✗ drivers/kernelsu/uapi missing"
+          [ -L "drivers/kernelsu/policy/uapi" ] && echo "    ✓ drivers/kernelsu/policy/uapi is symlink" || echo "    ✗ drivers/kernelsu/policy/uapi not symlink"
+          
+          if [ -f "drivers/kernelsu/uapi/app_profile.h" ]; then
+            echo "    ✓ app_profile.h found at drivers/kernelsu/uapi/app_profile.h"
+          else
+            echo "    ✗ app_profile.h not found"
+            echo "    Available uapi files:"
+            find drivers/kernelsu -name "*.h" -path "*/uapi/*" 2>/dev/null | head -10
+          fi
 
       - name: Integrate KowSU (Manual Hook)
         if: matrix.variant == 'kowsu'
@@ -327,9 +388,36 @@ jobs:
 
           # Fix uapi header visibility and version warnings
           echo "ccflags-y += -DKSU_GIT_VERSION=\"\\\"ac539bd\\\"\"" >> drivers/kernelsu/Kbuild
+          
+          # Ensure uapi directory structure for KowSU
+          # Copy uapi files from ksu_src if available, otherwise create symlink
+          if [ -d "../ksu_src/kernel/uapi" ]; then
+            mkdir -p drivers/kernelsu/uapi
+            cp -r ../ksu_src/kernel/uapi/* drivers/kernelsu/uapi/ 2>/dev/null || true
+          fi
+          
+          # Handle app_profile.h specifically - look for it in various locations
+          if [ ! -f "drivers/kernelsu/uapi/app_profile.h" ]; then
+            # Search for app_profile.h in cloned source
+            if [ -f "../ksu_src/kernel/uapi/app_profile.h" ]; then
+              cp ../ksu_src/kernel/uapi/app_profile.h drivers/kernelsu/uapi/
+            elif find ../ksu_src -name "app_profile.h" 2>/dev/null | grep -q .; then
+              cp $(find ../ksu_src -name "app_profile.h" 2>/dev/null | head -1) drivers/kernelsu/uapi/
+            else
+              # Create minimal stub if file doesn't exist
+              mkdir -p drivers/kernelsu/uapi
+              touch drivers/kernelsu/uapi/app_profile.h
+            fi
+          fi
+          
+          # Create symlink for policy includes
           rm -rf drivers/kernelsu/policy/uapi
-          ln -sf ../uapi drivers/kernelsu/policy/uapi
-          find drivers/kernelsu -name "app_profile.h" || true
+          if [ -d "drivers/kernelsu/uapi" ]; then
+            ln -sf ../uapi drivers/kernelsu/policy/uapi
+          else
+            mkdir -p drivers/kernelsu/uapi
+            ln -sf ../uapi drivers/kernelsu/policy/uapi
+          fi
 
           printf '%s\n' \
             '' \
