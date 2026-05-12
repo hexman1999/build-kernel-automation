@@ -522,12 +522,12 @@ jobs:
           sed -i 's/device.name1=.*/device.name1=sweet/'   AK3/anykernel.sh
           sed -i 's/device.name2=.*/device.name2=sweetin/' AK3/anykernel.sh
           sed -i 's/is_slot_device=.*/is_slot_device=0/'   AK3/anykernel.sh
-
           # Set boot partition explicitly:
           #   Remove any existing block= line, then insert after do.devicecheck=
           #   which is always present — avoids position ambiguity
           sed -i '/^block=/d' AK3/anykernel.sh
           sed -i '/^do.devicecheck=/a block=/dev/block/by-name/boot;' AK3/anykernel.sh
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/' AK3/anykernel.sh
           echo "  ✓ block=/dev/block/by-name/boot; set"
 
           # Map variant → friendly display name
