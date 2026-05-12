@@ -5,13 +5,13 @@ on:
     inputs:
       # ── Variants (select one or more — at least one required) ─────────────────
       build_kernelsu_next:
-        description: "✅ Build with KernelSU Next (manual hook)"
+        description: "✅ Build with KernelSU Next (inline hook)"
         required: false
         default: true
         type: boolean
 
       build_kowsu:
-        description: "✅ Build with KowSU (manual hook)"
+        description: "✅ Build with KowSU (inline hook)"
         required: false
         default: false
         type: boolean
@@ -205,75 +205,9 @@ jobs:
         run: |
           echo "Clang: $(toolchain/clang/bin/clang --version | head -1)"
 
-      - name: Write Hook Injector Script
-        if: matrix.variant != 'vanilla'
-        run: |
-          cat > /tmp/inject_ksu_hooks.py << 'PYEOF'
-          import re, sys
 
-          def inject_before_pattern(src, func_pattern, target_pattern, injection):
-              lines = src.split('\n')
-              in_func, depth, injected, result = False, 0, False, []
-              for line in lines:
-                  if not in_func and re.search(func_pattern, line):
-                      in_func, depth = True, 0
-                  if in_func and not injected:
-                      depth += line.count('{') - line.count('}')
-                      if re.search(target_pattern, line):
-                          result.append(injection)
-                          injected = True
-                      if depth <= 0:
-                          in_func = False
-                  result.append(line)
-              if not injected:
-                  print(f"  ⚠  target '{target_pattern}' not found in '{func_pattern}'")
-              return '\n'.join(result), injected
 
-          # ── fs/exec.c ──────────────────────────────────────────────────────────
-          EXEC_DECL = (
-              'extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,\n'
-              '\tvoid *argv, void *envp, int *flags);\n'
-          )
-          EXEC_HOOK = '\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);\n'
-
-          with open('fs/exec.c') as f: src = f.read()
-
-          if 'ksu_handle_execveat' in src:
-              print('  ℹ  fs/exec.c already patched')
-          else:
-              end = max(m.end() for m in re.finditer(r'^#include\s+[<"]', src, re.MULTILINE))
-              pos = src.index('\n', end) + 1
-              src = src[:pos] + '\n' + EXEC_DECL + src[pos:]
-              kw = r'bprm_execve\s*\(' if 'bprm_execve' in src else r'search_binary_handler\s*\('
-              src, ok = inject_before_pattern(src, r'\bdo_execveat_common\b', kw, EXEC_HOOK)
-              with open('fs/exec.c', 'w') as f: f.write(src)
-              print(f"  {'✓' if ok else '⚠'} fs/exec.c patched")
-
-          # ── fs/open.c ──────────────────────────────────────────────────────────
-          OPEN_DECL = (
-              'extern int ksu_handle_faccessat(int *dfd,\n'
-              '\tconst char __user **filename_user, int *mode, int *flags);\n'
-          )
-          OPEN_HOOK = '\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);\n'
-
-          with open('fs/open.c') as f: src = f.read()
-
-          if 'ksu_handle_faccessat' in src:
-              print('  ℹ  fs/open.c already patched')
-          else:
-              end = max(m.end() for m in re.finditer(r'^#include\s+[<"]', src, re.MULTILINE))
-              pos = src.index('\n', end) + 1
-              src = src[:pos] + '\n' + OPEN_DECL + src[pos:]
-              fpat = r'\bdo_faccessat\b' if 'do_faccessat' in src else r'\bsys_faccessat\b'
-              src, ok = inject_before_pattern(src, fpat, r'^\s+if\s*\(', OPEN_HOOK)
-              with open('fs/open.c', 'w') as f: f.write(src)
-              print(f"  {'✓' if ok else '⚠'} fs/open.c patched")
-
-          sys.exit(0)
-          PYEOF
-          echo "  ✓ Hook injector script written"
-
-      - name: Integrate KernelSU Next (Manual Hook)
+      - name: Integrate KernelSU Next (Inline Hook)
         if: matrix.variant == 'kernelsu_next'
         run: |
           cd ${{ env.KERNEL_DIR }}
@@ -288,7 +222,7 @@ jobs:
           grep -q "kernelsu" drivers/Kconfig || \
             sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-          # Fix uapi directory BEFORE attempting hook injection
+          # Fix uapi directory BEFORE configuration
           echo "Setting up uapi headers..."
           if [ -d "../ksu_src/kernel/uapi" ]; then
             mkdir -p drivers/kernelsu/uapi
@@ -314,33 +248,16 @@ jobs:
           ln -sf ../uapi drivers/kernelsu/policy/uapi
           echo "  ✓ uapi symlink created"
 
-          # Try manual hook, fallback to inline if it fails
+          # Use inline hook mode exclusively
           echo "ccflags-y += -DKSU_GIT_VERSION=\"\\\"ac539bd\\\"\"" >> drivers/kernelsu/Kbuild
           
-          if python3 /tmp/inject_ksu_hooks.py 2>&1 | grep -q "target.*not found"; then
-            echo "  ⚠ Manual hook injection failed for 4.14 kernel, using inline hook instead"
-            USE_INLINE_HOOK=1
-          else
-            USE_INLINE_HOOK=0
-          fi
-
-          if [ "$USE_INLINE_HOOK" -eq 1 ]; then
-            printf '%s\n' \
-              '' \
-              '# KernelSU Next — inline hook (fallback)' \
-              'CONFIG_KSU=y' \
-              'CONFIG_KSU_INLINE_HOOK=y' \
-              >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
-            echo "  ✓ Using inline hook mode"
-          else
-            printf '%s\n' \
-              '' \
-              '# KernelSU Next — manual hook' \
-              'CONFIG_KSU=y' \
-              'CONFIG_KSU_MANUAL_HOOK=y' \
-              >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
-            echo "  ✓ Using manual hook mode"
-          fi
+          printf '%s\n' \
+            '' \
+            '# KernelSU Next — inline hook' \
+            'CONFIG_KSU=y' \
+            'CONFIG_KSU_INLINE_HOOK=y' \
+            >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+          echo "  ✓ Using inline hook mode"
 
           grep -q "CONFIG_KSU_KPROBES_HOOK" drivers/kernelsu/Kconfig 2>/dev/null && \
             echo 'CONFIG_KSU_KPROBES_HOOK=n' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} || true
@@ -381,7 +298,7 @@ jobs:
             find drivers/kernelsu -name "*.h" -path "*/uapi/*" 2>/dev/null | head -10
           fi
 
-      - name: Integrate KowSU (Manual Hook)
+      - name: Integrate KowSU (Inline Hook)
         if: matrix.variant == 'kowsu'
         run: |
           cd ${{ env.KERNEL_DIR }}
@@ -396,7 +313,7 @@ jobs:
           grep -q "kernelsu" drivers/Kconfig || \
             sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-          # Fix uapi directory BEFORE attempting hook injection
+          # Fix uapi directory BEFORE configuration
           echo "Setting up uapi headers..."
           if [ -d "../ksu_src/kernel/uapi" ]; then
             mkdir -p drivers/kernelsu/uapi
@@ -422,33 +339,16 @@ jobs:
           ln -sf ../uapi drivers/kernelsu/policy/uapi
           echo "  ✓ uapi symlink created"
 
-          # Try manual hook, fallback to inline if it fails
+          # Use inline hook mode exclusively
           echo "ccflags-y += -DKSU_GIT_VERSION=\"\\\"ac539bd\\\"\"" >> drivers/kernelsu/Kbuild
           
-          if python3 /tmp/inject_ksu_hooks.py 2>&1 | grep -q "target.*not found"; then
-            echo "  ⚠ Manual hook injection failed for 4.14 kernel, using inline hook instead"
-            USE_INLINE_HOOK=1
-          else
-            USE_INLINE_HOOK=0
-          fi
-
-          if [ "$USE_INLINE_HOOK" -eq 1 ]; then
-            printf '%s\n' \
-              '' \
-              '# KowSU — inline hook (fallback)' \
-              'CONFIG_KSU=y' \
-              'CONFIG_KSU_INLINE_HOOK=y' \
-              >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
-            echo "  ✓ Using inline hook mode"
-          else
-            printf '%s\n' \
-              '' \
-              '# KowSU — manual hook' \
-              'CONFIG_KSU=y' \
-              'CONFIG_KSU_MANUAL_HOOK=y' \
-              >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
-            echo "  ✓ Using manual hook mode"
-          fi
+          printf '%s\n' \
+            '' \
+            '# KowSU — inline hook' \
+            'CONFIG_KSU=y' \
+            'CONFIG_KSU_INLINE_HOOK=y' \
+            >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
+          echo "  ✓ Using inline hook mode"
 
           grep -q "CONFIG_KSU_KPROBES_HOOK" drivers/kernelsu/Kconfig 2>/dev/null && \
             echo 'CONFIG_KSU_KPROBES_HOOK=n' >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }} || true
