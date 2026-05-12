@@ -59,7 +59,7 @@ jobs:
       - name: Setup Build Environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential bc bison ca-certificates curl flex fontconfig-config fonts-dejavu-core gcc git gnupg gzip libelf-dev lib32z1-dev libtinfo5 openssl pahole python3 repo rsync schedtool wget zip zlib1g-dev
+          sudo apt-get install -y build-essential bc bison ca-certificates curl flex fontconfig-config fonts-dejavu-core gcc gcc-aarch64-linux-gnu git gnupg gzip libelf-dev lib32z1-dev libtinfo5 openssl pahole python3 repo rsync schedtool wget zip zlib1g-dev
 
           # Download AOSP Clang
           echo "Downloading AOSP Clang..."
@@ -67,9 +67,7 @@ jobs:
           wget "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-${{ env.CLANG_VERSION }}.tar.gz" -O toolchain/clang.tar.gz
           tar -xzf toolchain/clang.tar.gz -C toolchain/clang
 
-          # Download AOSP GCC (git clone is more reliable than tar for GCC)
-          echo "Downloading AOSP GCC..."
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 toolchain/gcc
+          # GCC binutils provided by gcc-aarch64-linux-gnu apt package (AOSP GCC binaries removed from upstream)
 
       - name: Apply LN8000 Patches
         run: |
@@ -194,8 +192,8 @@ jobs:
           cd ${{ env.KERNEL_DIR }}
           echo "Starting kernel build..."
 
-          export PATH=${{ github.workspace }}/toolchain/clang/bin:${{ github.workspace }}/toolchain/gcc/bin:$PATH
-          export CROSS_COMPILE=aarch64-linux-android-
+          export PATH=${{ github.workspace }}/toolchain/clang/bin:$PATH
+          export CROSS_COMPILE=aarch64-linux-gnu-
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC=clang
           export CXX=clang++
