@@ -103,7 +103,7 @@ jobs:
           cd ${{ env.KERNEL_DIR }}
           echo "Integrating KernelSU Next (4.14 kernel compatible)..."
 
-          curl -LSs https://raw.githubusercontent.com/tiann/KernelSU/next/kernel/setup.sh | bash
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s stable
 
           if ! grep -q "CONFIG_KPROBES=y" arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}; then
             echo "CONFIG_KPROBES=y" >> arch/arm64/configs/${{ env.DEVICE_DEFCONFIG }}
