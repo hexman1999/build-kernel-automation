@@ -290,7 +290,7 @@ jobs:
           # Fix uapi header visibility and version warnings
           echo "ccflags-y += -DKSU_GIT_VERSION=\"\\\"504d8e7\\\"\"" >> drivers/kernelsu/Kbuild
           mkdir -p drivers/kernelsu/policy/uapi
-          find drivers/kernelsu -name "app_profile.h" -exec cp {} drivers/kernelsu/policy/uapi/ \;
+          cp -r drivers/kernelsu/uapi/* drivers/kernelsu/policy/uapi/ 2>/dev/null || true
 
           printf '%s\n' \
             '' \
@@ -324,7 +324,7 @@ jobs:
           # Fix uapi header visibility and version warnings
           echo "ccflags-y += -DKSU_GIT_VERSION=\"\\\"504d8e7\\\"\"" >> drivers/kernelsu/Kbuild
           mkdir -p drivers/kernelsu/policy/uapi
-          find drivers/kernelsu -name "app_profile.h" -exec cp {} drivers/kernelsu/policy/uapi/ \;
+          cp -r drivers/kernelsu/uapi/* drivers/kernelsu/policy/uapi/ 2>/dev/null || true
 
           printf '%s\n' \
             '' \
