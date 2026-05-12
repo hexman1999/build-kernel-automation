@@ -283,7 +283,8 @@ jobs:
               echo "  ⚠ app_profile.h not found upstream — stub created"
             fi
           fi
-
+          sed -i '1i #include <linux/syscalls.h>' drivers/kernelsu/hook/syscall_hook.h
+          sed -i '2i typedef void (*syscall_fn_t)(void);' drivers/kernelsu/hook/syscall_hook.h
           # 4. Ensure feature.h exists — stub if missing
           if [ ! -f "/tmp/ksu_uapi_collected/feature.h" ]; then
             FOUND=$(find ../ksu_src -name "feature.h" 2>/dev/null | head -1)
